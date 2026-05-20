@@ -105,7 +105,7 @@
 	let loaded = false;
 	let backendUrlSet = false;
 
-	const handleSaveBackendUrl = (url: string) => {
+	const handleSaveBackendUrl = (url) => {
 		localStorage.setItem('backendUrl', url);
 		backendUrlSet = true;
 		window.location.reload();
