@@ -118,7 +118,33 @@
 	let showSyncStatsModal = false;
 	let syncStatsEventData = null;
 
-	let heartbeatInterval = null;
+	$: if ($theme) {
+		if (typeof document !== 'undefined') {
+			const themes = ['dark', 'light', 'oled-dark', 'her'];
+			let themeToApply = $theme === 'oled-dark' ? 'dark' : $theme === 'her' ? 'light' : $theme;
+			if ($theme === 'system') {
+				themeToApply = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+			}
+			themes
+				.filter((e) => e !== themeToApply)
+				.forEach((e) => {
+					e.split(' ').forEach((cls) => document.documentElement.classList.remove(cls));
+				});
+			themeToApply.split(' ').forEach((cls) => document.documentElement.classList.add(cls));
+
+			if ($theme === 'oled-dark') {
+				document.documentElement.style.setProperty('--color-gray-800', '#101010');
+				document.documentElement.style.setProperty('--color-gray-850', '#050505');
+				document.documentElement.style.setProperty('--color-gray-900', '#000000');
+				document.documentElement.style.setProperty('--color-gray-950', '#000000');
+			} else if (themeToApply === 'dark') {
+				document.documentElement.style.setProperty('--color-gray-800', '#333');
+				document.documentElement.style.setProperty('--color-gray-850', '#262626');
+				document.documentElement.style.setProperty('--color-gray-900', '#171717');
+				document.documentElement.style.setProperty('--color-gray-950', '#0d0d0d');
+			}
+		}
+	}
 
 	const BREAKPOINT = 768;
 
@@ -973,6 +999,26 @@
 		handleVisibilityChange();
 
 		theme.set(localStorage.theme);
+
+		// Listen to OS prefers-color-scheme changes dynamically if theme is 'system'
+		const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+		const handleSystemThemeChange = (e) => {
+			if (localStorage.theme === 'system') {
+				const themes = ['dark', 'light', 'oled-dark', 'her'];
+				const themeToApply = e.matches ? 'dark' : 'light';
+				themes
+					.filter((e) => e !== themeToApply)
+					.forEach((e) => {
+						e.split(' ').forEach((cls) => document.documentElement.classList.remove(cls));
+					});
+				themeToApply.split(' ').forEach((cls) => document.documentElement.classList.add(cls));
+			}
+		};
+		if (mediaQuery.addEventListener) {
+			mediaQuery.addEventListener('change', handleSystemThemeChange);
+		} else {
+			mediaQuery.addListener(handleSystemThemeChange);
+		}
 
 		mobile.set(window.innerWidth < BREAKPOINT);
 

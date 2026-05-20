@@ -31,8 +31,48 @@ public class MainActivity extends BridgeActivity {
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        // Register custom plugins
+        registerPlugin(MicrophoneServicePlugin.class);
+
         // Keep screen on for live conversation
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+
+        // Request startup permissions proactively for better UX
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            List<String> permissions = new ArrayList<>();
+            if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                permissions.add(android.Manifest.permission.RECORD_AUDIO);
+            }
+            if (checkSelfPermission(android.Manifest.permission.CAMERA) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                permissions.add(android.Manifest.permission.CAMERA);
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    permissions.add(android.Manifest.permission.POST_NOTIFICATIONS);
+                }
+                if (checkSelfPermission(android.Manifest.permission.READ_MEDIA_IMAGES) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    permissions.add(android.Manifest.permission.READ_MEDIA_IMAGES);
+                }
+                if (checkSelfPermission(android.Manifest.permission.READ_MEDIA_VIDEO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    permissions.add(android.Manifest.permission.READ_MEDIA_VIDEO);
+                }
+                if (checkSelfPermission(android.Manifest.permission.READ_MEDIA_AUDIO) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    permissions.add(android.Manifest.permission.READ_MEDIA_AUDIO);
+                }
+            } else {
+                if (checkSelfPermission(android.Manifest.permission.READ_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                    permissions.add(android.Manifest.permission.READ_EXTERNAL_STORAGE);
+                }
+                if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+                    if (checkSelfPermission(android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        permissions.add(android.Manifest.permission.WRITE_EXTERNAL_STORAGE);
+                    }
+                }
+            }
+            if (!permissions.isEmpty()) {
+                requestPermissions(permissions.toArray(new String[0]), 12345);
+            }
+        }
 
         // Configure WebView for optimal performance and memory
         WebView webView = getBridge().getWebView();
@@ -64,29 +104,6 @@ public class MainActivity extends BridgeActivity {
 
         // Cache mode for better performance
         webView.getSettings().setCacheMode(android.webkit.WebSettings.LOAD_DEFAULT);
-
-        webView.setWebChromeClient(new WebChromeClient() {
-            @Override
-            public void onPermissionRequest(PermissionRequest request) {
-                // Grant microphone permission for WebView
-                String[] resources = request.getResources();
-                for (String resource : resources) {
-                    if (PermissionRequest.RESOURCE_AUDIO_CAPTURE.equals(resource)) {
-                        // Forward to Android permission system
-                        request.grant(resources);
-                        return;
-                    }
-                }
-                request.grant(resources);
-            }
-
-            @Override
-            public boolean onShowFileChooser(WebView webView, ValueCallback<Uri[]> filePathCallback,
-                                              FileChooserParams fileChooserParams) {
-                // File upload handling through Capacitor
-                return super.onShowFileChooser(webView, filePathCallback, fileChooserParams);
-            }
-        });
 
         // Enable mixed content for dev scenarios
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.LOLLIPOP) {

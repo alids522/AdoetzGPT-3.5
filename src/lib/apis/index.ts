@@ -1511,15 +1511,22 @@ export const getUsage = async (token: string = '') => {
 	return res;
 };
 
-export const getBackendConfig = async () => {
+export const getBackendConfig = async (token?: string) => {
 	let error = null;
+
+	const headers: Record<string, string> = {
+		'Content-Type': 'application/json'
+	};
+
+	const jwt = token || (typeof localStorage !== 'undefined' ? localStorage.token : null);
+	if (jwt) {
+		headers['Authorization'] = `Bearer ${jwt}`;
+	}
 
 	const res = await fetch(`${WEBUI_BASE_URL}/api/config`, {
 		method: 'GET',
 		credentials: 'include',
-		headers: {
-			'Content-Type': 'application/json'
-		}
+		headers
 	})
 		.then(async (res) => {
 			if (!res.ok) throw await res.json();
@@ -1545,7 +1552,7 @@ export const getBackendConfig = async () => {
 					method: 'GET',
 					credentials: 'include',
 					redirect: 'manual',
-					headers: { 'Content-Type': 'application/json' }
+					headers
 				});
 				if (
 					probeRes.type === 'opaqueredirect' ||
