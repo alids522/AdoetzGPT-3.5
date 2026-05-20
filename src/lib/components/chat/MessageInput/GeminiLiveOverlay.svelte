@@ -9,6 +9,7 @@
 		isCapacitorApp,
 		startMicrophoneForegroundService,
 		stopMicrophoneForegroundService,
+		getMicrophoneServicePlugin,
 		type GeminiLiveConfig
 	} from '$lib/capacitor/microphone';
 
@@ -188,8 +189,7 @@
 		};
 
 		// Register native event listeners BEFORE starting the service
-		const win = window as any;
-		const micService = win?.Capacitor?.Plugins?.MicrophoneService;
+		const micService = getMicrophoneServicePlugin();
 		if (!micService) {
 			toast.error('MicrophoneService plugin not available');
 			return;

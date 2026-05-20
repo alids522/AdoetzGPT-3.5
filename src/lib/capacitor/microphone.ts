@@ -11,27 +11,40 @@ export interface GeminiLiveConfig {
 	systemPrompt: string;
 }
 
-interface MicrophoneServiceInterface {
+interface MicrophoneServicePlugin {
 	startForegroundService(config?: GeminiLiveConfig): Promise<{ started: boolean }>;
 	stopForegroundService(): Promise<{ stopped: boolean }>;
 	isRunning(): Promise<{ running: boolean }>;
 	addListener(event: string, callback: (data: any) => void): Promise<any>;
 }
 
-let microphoneService: MicrophoneServiceInterface | null = null;
+let _plugin: MicrophoneServicePlugin | null = null;
 
-function getMicrophoneService(): MicrophoneServiceInterface | null {
-	if (microphoneService) return microphoneService;
+/**
+ * Get the MicrophoneService Capacitor plugin.
+ * Uses registerPlugin from @capacitor/core for reliable access in Capacitor 5+/6.
+ */
+export function getMicrophoneServicePlugin(): MicrophoneServicePlugin | null {
+	if (_plugin) return _plugin;
 	try {
-		// Capacitor plugins are available on window
-		const win = window as any;
-		if (win?.Capacitor?.Plugins?.MicrophoneService) {
-			microphoneService = win.Capacitor.Plugins.MicrophoneService;
+		const cap = (window as any)?.Capacitor;
+		if (!cap) return null;
+
+		// Capacitor 6: use registerPlugin for custom native plugins
+		if (typeof cap.registerPlugin === 'function') {
+			_plugin = cap.registerPlugin('MicrophoneService');
+			return _plugin;
+		}
+
+		// Fallback: direct access (older Capacitor versions)
+		if (cap.Plugins?.MicrophoneService) {
+			_plugin = cap.Plugins.MicrophoneService;
+			return _plugin;
 		}
 	} catch {
 		// Not running in Capacitor environment
 	}
-	return microphoneService;
+	return null;
 }
 
 /**
@@ -40,10 +53,10 @@ function getMicrophoneService(): MicrophoneServiceInterface | null {
  * (WebSocket + mic + audio playback all in Java, independent of WebView).
  */
 export async function startMicrophoneForegroundService(config?: GeminiLiveConfig): Promise<boolean> {
-	const service = getMicrophoneService();
-	if (!service) return false;
+	const plugin = getMicrophoneServicePlugin();
+	if (!plugin) return false;
 	try {
-		const result = await service.startForegroundService(config);
+		const result = await plugin.startForegroundService(config);
 		return result?.started ?? false;
 	} catch {
 		return false;
@@ -51,10 +64,10 @@ export async function startMicrophoneForegroundService(config?: GeminiLiveConfig
 }
 
 export async function stopMicrophoneForegroundService(): Promise<boolean> {
-	const service = getMicrophoneService();
-	if (!service) return false;
+	const plugin = getMicrophoneServicePlugin();
+	if (!plugin) return false;
 	try {
-		const result = await service.stopForegroundService();
+		const result = await plugin.stopForegroundService();
 		return result?.stopped ?? false;
 	} catch {
 		return false;
