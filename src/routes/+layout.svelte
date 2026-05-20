@@ -878,6 +878,7 @@
 		} else {
 			backendUrlSet = false;
 			loaded = true;
+			document.getElementById('splash-screen')?.remove();
 			return; // Halts initialization to show setup screen
 		}
 
