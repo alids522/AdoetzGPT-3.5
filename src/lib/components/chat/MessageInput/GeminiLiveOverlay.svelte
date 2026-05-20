@@ -398,46 +398,46 @@
 
 	const startAudioInput = async () => {
 		if (isCapacitorApp()) {
+			let nativeStarted = false;
 			try {
-				const started = await startMicrophoneForegroundService();
-				if (!started) {
-					toast.error('Failed to start native microphone service');
-					return;
-				}
+				nativeStarted = await startMicrophoneForegroundService();
+				if (nativeStarted) {
+					const win = window as any;
+					const micService = win?.Capacitor?.Plugins?.MicrophoneService;
+					if (micService) {
+						nativeListener = await micService.addListener('audioChunk', (event: { data: string; rms: number }) => {
+							if (!isListening || isMuted || !session) return;
 
-				const win = window as any;
-				const micService = win?.Capacitor?.Plugins?.MicrophoneService;
-				if (micService) {
-					nativeListener = await micService.addListener('audioChunk', (event: { data: string; rms: number }) => {
-						if (!isListening || isMuted || !session) return;
+							rmsLevel = event.rms;
 
-						rmsLevel = event.rms;
-
-						if (isPlaying && rmsLevel > 0.15 && !isInterrupting) {
-							triggerLocalInterrupt();
-						}
-
-						if (session) {
-							try {
-								(session as any).sendRealtimeInput({
-									audio: {
-										mimeType: 'audio/pcm;rate=16000',
-										data: event.data
-									}
-								});
-							} catch (e) {
-								console.error('Failed to send native audio chunk:', e);
+							if (isPlaying && rmsLevel > 0.15 && !isInterrupting) {
+								triggerLocalInterrupt();
 							}
-						}
-					});
-				}
 
-				isListening = true;
+							if (session) {
+								try {
+									(session as any).sendRealtimeInput({
+										audio: {
+											mimeType: 'audio/pcm;rate=16000',
+											data: event.data
+										}
+									});
+								} catch (e) {
+									console.error('Failed to send native audio chunk:', e);
+								}
+							}
+						});
+						isListening = true;
+						console.log('Native background microphone service started successfully.');
+						return;
+					}
+				}
 			} catch (error) {
-				console.error('Error starting native audio input:', error);
-				toast.error('Failed to access native microphone');
+				console.error('Failed to initialize native background audio recording:', error);
 			}
-			return;
+
+			console.warn('Native background microphone service failed to start. Falling back to browser WebRTC (foreground-only).');
+			toast.info('Using foreground-only microphone mode');
 		}
 
 		try {

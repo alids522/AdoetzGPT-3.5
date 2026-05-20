@@ -51,14 +51,6 @@ public class MicrophoneServicePlugin extends Plugin {
             return;
         }
 
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            if (ContextCompat.checkSelfPermission(getContext(), Manifest.permission.POST_NOTIFICATIONS)
-                    != PackageManager.PERMISSION_GRANTED) {
-                call.reject("Notification permission not granted");
-                return;
-            }
-        }
-
         Intent serviceIntent = new Intent(getContext(), MicrophoneForegroundService.class);
         serviceIntent.setAction(MicrophoneForegroundService.ACTION_START);
 
