@@ -18,6 +18,7 @@
 	let nativeListeners: any[] = [];
 	let userClosed = false;
 	let cleanedUp = false;
+	const useNativeGeminiLive = false;
 
 	const i18n = getContext('i18n') as any;
 	const dispatch = createEventDispatcher();
@@ -171,6 +172,8 @@
 			: '';
 		return `${basePersonality}${sharedContext}`;
 	};
+
+	const isNativeGeminiLiveEnabled = () => useNativeGeminiLive && isCapacitorApp();
 
 	// ========================================================================
 	// NATIVE MODE (Capacitor Android) — Everything runs in Java
@@ -606,7 +609,7 @@
 		isInterrupting = true;
 		audioQueue = [];
 
-		if (isCapacitorApp()) {
+		if (isNativeGeminiLiveEnabled()) {
 			const interrupted = await interruptMicrophoneForegroundServicePlayback();
 			if (!interrupted) {
 				isInterrupting = false;
@@ -735,7 +738,7 @@
 	const toggleMute = async () => {
 		const nextMuted = !isMuted;
 		isMuted = nextMuted;
-		if (isCapacitorApp()) {
+		if (isNativeGeminiLiveEnabled()) {
 			const updated = await setMicrophoneForegroundServiceMuted(nextMuted);
 			if (!updated) {
 				isMuted = !nextMuted;
@@ -768,11 +771,12 @@
 		(async () => {
 			await setWakeLock();
 
-			if (isCapacitorApp()) {
-				// NATIVE MODE: everything runs in Java foreground service
+			if (isNativeGeminiLiveEnabled()) {
+				// Native mode is kept behind a feature flag. The Web SDK path is the known-good
+				// Gemini Live implementation and is used on Android WebView too.
 				await startNativeMode();
 			} else {
-				// WEB MODE: WebSocket in JS
+				// WEB MODE: WebSocket in JS / WebView
 				const initializedSession = await initSession();
 				if (initializedSession) {
 					await startAudioInput();
@@ -792,7 +796,7 @@
 		if (cleanedUp) return;
 		cleanedUp = true;
 
-		if (isCapacitorApp()) {
+		if (isNativeGeminiLiveEnabled()) {
 			removeNativeListeners();
 			stopMicrophoneForegroundService();
 		}
@@ -861,10 +865,11 @@
 
 	const handleSettingsModelChange = async () => {
 		localStorage.setItem('gemini_live_model', selectedModel);
-		if (isCapacitorApp()) {
+		if (isNativeGeminiLiveEnabled()) {
 			await restartNativeService();
 		} else {
 			cleanup();
+			cleanedUp = false;
 			const newSession = await initSession(true);
 			if (newSession) {
 				await startAudioInput();
@@ -877,10 +882,11 @@
 		if (selectedVoice === voice) return;
 		selectedVoice = voice;
 		localStorage.setItem('gemini_live_voice', voice);
-		if (isCapacitorApp()) {
+		if (isNativeGeminiLiveEnabled()) {
 			await restartNativeService();
 		} else {
 			cleanup();
+			cleanedUp = false;
 			const newSession = await initSession(true);
 			if (newSession) {
 				await startAudioInput();
@@ -894,7 +900,7 @@
 		selectedPersonality = persona;
 		localStorage.setItem('gemini_live_personality', persona);
 
-		if (isCapacitorApp()) {
+		if (isNativeGeminiLiveEnabled()) {
 			// On native, personality changes require restarting the service
 			restartNativeService();
 		} else if (session) {
