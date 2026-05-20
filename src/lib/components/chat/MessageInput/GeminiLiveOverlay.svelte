@@ -19,7 +19,8 @@
 	let userClosed = false;
 	let cleanedUp = false;
 	const useNativeGeminiLive = false;
-	const useNativeMicrophoneCapture = true;
+	const useNativeMicrophoneCapture = false;
+	const useNativeLiveKeepAliveService = true;
 
 	const i18n = getContext('i18n') as any;
 	const dispatch = createEventDispatcher();
@@ -85,7 +86,7 @@
 		'Sarcastic': 'You are highly sarcastic, witty, and cynical. You answer the user accurately but roll your virtual eyes while doing so. Use dry humor and mild, playful condescension.'
 	};
 
-	const SEND_SAMPLE_RATE = 16000;
+	const SEND_SAMPLE_RATE = 24000;
 	const RECEIVE_SAMPLE_RATE = 24000;
 	const MIN_DECIBELS = -55;
 
@@ -177,6 +178,8 @@
 	const isNativeGeminiLiveEnabled = () => useNativeGeminiLive && isCapacitorApp();
 	const isNativeMicrophoneCaptureEnabled = () =>
 		useNativeMicrophoneCapture && isCapacitorApp() && !isNativeGeminiLiveEnabled();
+	const isNativeLiveKeepAliveServiceEnabled = () =>
+		useNativeLiveKeepAliveService && isCapacitorApp() && !isNativeGeminiLiveEnabled();
 
 	// ========================================================================
 	// NATIVE MODE (Capacitor Android) — Everything runs in Java
@@ -398,7 +401,7 @@
 				try {
 					(session as any).sendRealtimeInput({
 						audio: {
-							mimeType: 'audio/pcm;rate=16000',
+							mimeType: `audio/pcm;rate=${SEND_SAMPLE_RATE}`,
 							data: event.data
 						}
 					});
@@ -427,6 +430,18 @@
 
 		await startAudioInput();
 		startListening();
+		return true;
+	};
+
+	const startNativeLiveKeepAliveService = async () => {
+		if (!isNativeLiveKeepAliveServiceEnabled()) return true;
+
+		const started = await startMicrophoneForegroundService({ keepAliveOnly: true });
+		if (!started) {
+			toast.error('Failed to start Android live foreground service');
+			return false;
+		}
+
 		return true;
 	};
 
@@ -462,6 +477,7 @@
 		try {
 			const ai = new GoogleGenAI({
 				apiKey,
+				apiVersion: 'v1beta',
 				...(apiBaseUrl && { baseUrl: apiBaseUrl })
 			});
 
@@ -769,7 +785,7 @@
 						try {
 							(session as any).sendRealtimeInput({
 								audio: {
-									mimeType: 'audio/pcm;rate=16000',
+									mimeType: `audio/pcm;rate=${SEND_SAMPLE_RATE}`,
 									data: base64Data
 								}
 							});
@@ -834,9 +850,14 @@
 				await startNativeMode();
 			} else {
 				// WEB MODE: WebSocket in JS / WebView
+				const serviceStarted = await startNativeLiveKeepAliveService();
+				if (!serviceStarted) return;
+
 				const initializedSession = await initSession();
 				if (initializedSession) {
 					await startPlatformAudioInput();
+				} else if (isNativeLiveKeepAliveServiceEnabled()) {
+					stopMicrophoneForegroundService();
 				}
 			}
 		})();
@@ -852,7 +873,11 @@
 		if (cleanedUp) return;
 		cleanedUp = true;
 
-		if (isNativeGeminiLiveEnabled() || isNativeMicrophoneCaptureEnabled()) {
+		if (
+			isNativeGeminiLiveEnabled() ||
+			isNativeMicrophoneCaptureEnabled() ||
+			isNativeLiveKeepAliveServiceEnabled()
+		) {
 			removeNativeListeners();
 			stopMicrophoneForegroundService();
 		}

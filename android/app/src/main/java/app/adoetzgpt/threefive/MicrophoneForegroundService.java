@@ -18,6 +18,7 @@ import android.os.Build;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
+import android.os.PowerManager;
 import android.util.Base64;
 import android.util.Log;
 
@@ -54,6 +55,7 @@ public class MicrophoneForegroundService extends Service
     public static final String EXTRA_SYSTEM_PROMPT = "systemPrompt";
     public static final String EXTRA_MUTED = "muted";
     public static final String EXTRA_CAPTURE_ONLY = "captureOnly";
+    public static final String EXTRA_KEEP_ALIVE_ONLY = "keepAliveOnly";
 
     private static volatile boolean serviceRunning = false;
 
@@ -71,6 +73,8 @@ public class MicrophoneForegroundService extends Service
     private String systemPrompt = "";
     private String wsUrl = "";
     private volatile boolean captureOnly = false;
+    private volatile boolean keepAliveOnly = false;
+    private PowerManager.WakeLock wakeLock = null;
 
     // Audio playback
     private AudioTrack audioTrack = null;
@@ -143,6 +147,7 @@ public class MicrophoneForegroundService extends Service
         // Extract config from intent
         isMuted = false;
         captureOnly = intent.getBooleanExtra(EXTRA_CAPTURE_ONLY, false);
+        keepAliveOnly = intent.getBooleanExtra(EXTRA_KEEP_ALIVE_ONLY, false);
         if (intent.hasExtra(EXTRA_API_KEY)) {
             apiKey = intent.getStringExtra(EXTRA_API_KEY);
         }
@@ -172,6 +177,18 @@ public class MicrophoneForegroundService extends Service
             MicrophoneServicePlugin.sendConnectionStatus("error", "Foreground service failed: " + e.getMessage());
             stopSelf();
             return START_NOT_STICKY;
+        }
+
+        if (keepAliveOnly) {
+            shouldReconnect = false;
+            reconnectAttempts = 0;
+            closeGeminiSession();
+            stopRecording();
+            stopPlayback();
+            acquireWakeLock();
+            updateNotification("Listening...");
+            MicrophoneServicePlugin.sendConnectionStatus("connected", null);
+            return START_STICKY;
         }
 
         if (captureOnly) {
@@ -222,6 +239,7 @@ public class MicrophoneForegroundService extends Service
         stopRecording();
         stopPlayback();
         closeGeminiSession();
+        releaseWakeLock();
         serviceRunning = false;
         try {
             stopForeground(true);
@@ -236,6 +254,7 @@ public class MicrophoneForegroundService extends Service
     // ========================================================================
 
     private synchronized void startRecording() {
+        releaseWakeLock();
         if (isRecording) return;
         isRecording = true;
 
@@ -554,6 +573,31 @@ public class MicrophoneForegroundService extends Service
 
     public static boolean isServiceRunning() {
         return serviceRunning;
+    }
+
+    private void acquireWakeLock() {
+        if (wakeLock != null && wakeLock.isHeld()) return;
+
+        try {
+            PowerManager powerManager = (PowerManager) getSystemService(POWER_SERVICE);
+            wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "AdoetzGPT:LiveConversation");
+            wakeLock.setReferenceCounted(false);
+            wakeLock.acquire();
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to acquire live conversation wake lock", e);
+        }
+    }
+
+    private void releaseWakeLock() {
+        try {
+            if (wakeLock != null && wakeLock.isHeld()) {
+                wakeLock.release();
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to release live conversation wake lock", e);
+        } finally {
+            wakeLock = null;
+        }
     }
 
     // ========================================================================

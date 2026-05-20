@@ -114,6 +114,7 @@ public class MicrophoneServicePlugin extends Plugin {
         String systemPrompt = call.getString("systemPrompt", "");
         String wsUrl = call.getString("wsUrl", "");
         boolean captureOnly = call.getBoolean("captureOnly", false);
+        boolean keepAliveOnly = call.getBoolean("keepAliveOnly", false);
 
         serviceIntent.putExtra(MicrophoneForegroundService.EXTRA_API_KEY, apiKey);
         serviceIntent.putExtra(MicrophoneForegroundService.EXTRA_MODEL, model);
@@ -121,6 +122,7 @@ public class MicrophoneServicePlugin extends Plugin {
         serviceIntent.putExtra(MicrophoneForegroundService.EXTRA_SYSTEM_PROMPT, systemPrompt);
         serviceIntent.putExtra("wsUrl", wsUrl);
         serviceIntent.putExtra(MicrophoneForegroundService.EXTRA_CAPTURE_ONLY, captureOnly);
+        serviceIntent.putExtra(MicrophoneForegroundService.EXTRA_KEEP_ALIVE_ONLY, keepAliveOnly);
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

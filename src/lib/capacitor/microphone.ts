@@ -11,6 +11,7 @@ export interface GeminiLiveConfig {
 	systemPrompt?: string;
 	wsUrl?: string;
 	captureOnly?: boolean;
+	keepAliveOnly?: boolean;
 }
 
 interface MicrophoneServicePlugin {
