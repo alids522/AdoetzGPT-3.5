@@ -25,6 +25,23 @@ import com.getcapacitor.annotation.Permission;
 )
 public class MicrophoneServicePlugin extends Plugin {
 
+    private static MicrophoneServicePlugin instance = null;
+
+    @Override
+    public void load() {
+        super.load();
+        instance = this;
+    }
+
+    public static void sendAudioChunk(String base64Data, double rms) {
+        if (instance != null) {
+            JSObject js = new JSObject();
+            js.put("data", base64Data);
+            js.put("rms", rms);
+            instance.notifyListeners("audioChunk", js);
+        }
+    }
+
     @PluginMethod
     public void startForegroundService(PluginCall call) {
         // Check microphone permission

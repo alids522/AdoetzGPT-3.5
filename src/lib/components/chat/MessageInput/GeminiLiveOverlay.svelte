@@ -5,6 +5,13 @@
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import { WEBUI_API_BASE_URL } from '$lib/constants';
 	import { config } from '$lib/stores';
+	import {
+		isCapacitorApp,
+		startMicrophoneForegroundService,
+		stopMicrophoneForegroundService
+	} from '$lib/capacitor/microphone';
+
+	let nativeListener: any = null;
 
 	const i18n = getContext('i18n') as any;
 	const dispatch = createEventDispatcher();
@@ -390,6 +397,49 @@
 	};
 
 	const startAudioInput = async () => {
+		if (isCapacitorApp()) {
+			try {
+				const started = await startMicrophoneForegroundService();
+				if (!started) {
+					toast.error('Failed to start native microphone service');
+					return;
+				}
+
+				const win = window as any;
+				const micService = win?.Capacitor?.Plugins?.MicrophoneService;
+				if (micService) {
+					nativeListener = await micService.addListener('audioChunk', (event: { data: string; rms: number }) => {
+						if (!isListening || isMuted || !session) return;
+
+						rmsLevel = event.rms;
+
+						if (isPlaying && rmsLevel > 0.15 && !isInterrupting) {
+							triggerLocalInterrupt();
+						}
+
+						if (session) {
+							try {
+								(session as any).sendRealtimeInput({
+									audio: {
+										mimeType: 'audio/pcm;rate=16000',
+										data: event.data
+									}
+								});
+							} catch (e) {
+								console.error('Failed to send native audio chunk:', e);
+							}
+						}
+					});
+				}
+
+				isListening = true;
+			} catch (error) {
+				console.error('Error starting native audio input:', error);
+				toast.error('Failed to access native microphone');
+			}
+			return;
+		}
+
 		try {
 			audioStream = await navigator.mediaDevices.getUserMedia({
 				audio: {
@@ -525,6 +575,16 @@
 	});
 
 	const cleanup = () => {
+		if (isCapacitorApp()) {
+			if (nativeListener) {
+				try {
+					nativeListener.remove();
+				} catch (e) {}
+				nativeListener = null;
+			}
+			stopMicrophoneForegroundService();
+		}
+
 		if (session) {
 			try { session.close(); } catch (e) {}
 			session = null;

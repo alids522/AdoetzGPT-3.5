@@ -24,7 +24,11 @@ export function safeImageUrl(url: string): string {
 		url.startsWith(WEBUI_BASE_URL) ||
 		url.startsWith('https://www.gravatar.com/avatar/') ||
 		url.startsWith('data:') ||
-		url.startsWith('/')
+		url.startsWith('/') ||
+		url.startsWith('blob:') ||
+		url.startsWith('capacitor://') ||
+		url.startsWith('http://localhost') ||
+		url.startsWith('https://localhost')
 	) {
 		return url;
 	}
