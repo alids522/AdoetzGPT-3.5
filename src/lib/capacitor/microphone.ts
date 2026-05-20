@@ -15,6 +15,8 @@ export interface GeminiLiveConfig {
 interface MicrophoneServicePlugin {
 	startForegroundService(config?: GeminiLiveConfig): Promise<{ started: boolean }>;
 	stopForegroundService(): Promise<{ stopped: boolean }>;
+	setMuted(options: { muted: boolean }): Promise<{ muted: boolean }>;
+	interruptPlayback(): Promise<{ interrupted: boolean }>;
 	isRunning(): Promise<{ running: boolean }>;
 	addListener(event: string, callback: (data: any) => void): Promise<any>;
 }
@@ -70,6 +72,28 @@ export async function stopMicrophoneForegroundService(): Promise<boolean> {
 	try {
 		const result = await plugin.stopForegroundService();
 		return result?.stopped ?? false;
+	} catch {
+		return false;
+	}
+}
+
+export async function setMicrophoneForegroundServiceMuted(muted: boolean): Promise<boolean> {
+	const plugin = getMicrophoneServicePlugin();
+	if (!plugin) return false;
+	try {
+		const result = await plugin.setMuted({ muted });
+		return result?.muted === muted;
+	} catch {
+		return false;
+	}
+}
+
+export async function interruptMicrophoneForegroundServicePlayback(): Promise<boolean> {
+	const plugin = getMicrophoneServicePlugin();
+	if (!plugin) return false;
+	try {
+		const result = await plugin.interruptPlayback();
+		return result?.interrupted ?? false;
 	} catch {
 		return false;
 	}

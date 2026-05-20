@@ -151,9 +151,54 @@ public class MicrophoneServicePlugin extends Plugin {
     }
 
     @PluginMethod
+    public void setMuted(PluginCall call) {
+        if (!MicrophoneForegroundService.isServiceRunning()) {
+            call.reject("Microphone service is not running");
+            return;
+        }
+
+        boolean muted = call.getBoolean("muted", false);
+
+        Intent serviceIntent = new Intent(getContext(), MicrophoneForegroundService.class);
+        serviceIntent.setAction(MicrophoneForegroundService.ACTION_SET_MUTED);
+        serviceIntent.putExtra(MicrophoneForegroundService.EXTRA_MUTED, muted);
+
+        try {
+            getContext().startService(serviceIntent);
+            JSObject result = new JSObject();
+            result.put("muted", muted);
+            call.resolve(result);
+        } catch (Exception e) {
+            call.reject("Failed to update microphone mute state: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
+    public void interruptPlayback(PluginCall call) {
+        if (!MicrophoneForegroundService.isServiceRunning()) {
+            JSObject result = new JSObject();
+            result.put("interrupted", false);
+            call.resolve(result);
+            return;
+        }
+
+        Intent serviceIntent = new Intent(getContext(), MicrophoneForegroundService.class);
+        serviceIntent.setAction(MicrophoneForegroundService.ACTION_INTERRUPT_PLAYBACK);
+
+        try {
+            getContext().startService(serviceIntent);
+            JSObject result = new JSObject();
+            result.put("interrupted", true);
+            call.resolve(result);
+        } catch (Exception e) {
+            call.reject("Failed to interrupt playback: " + e.getMessage());
+        }
+    }
+
+    @PluginMethod
     public void isRunning(PluginCall call) {
         JSObject result = new JSObject();
-        result.put("running", false);
+        result.put("running", MicrophoneForegroundService.isServiceRunning());
         call.resolve(result);
     }
 }

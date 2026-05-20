@@ -44,17 +44,23 @@ public class MicrophoneForegroundService extends Service
 
     public static final String ACTION_START = "app.adoetzgpt.threefive.START_MIC_SERVICE";
     public static final String ACTION_STOP = "app.adoetzgpt.threefive.STOP_MIC_SERVICE";
+    public static final String ACTION_SET_MUTED = "app.adoetzgpt.threefive.SET_MIC_MUTED";
+    public static final String ACTION_INTERRUPT_PLAYBACK = "app.adoetzgpt.threefive.INTERRUPT_PLAYBACK";
 
     // Intent extras for Gemini Live config
     public static final String EXTRA_API_KEY = "apiKey";
     public static final String EXTRA_MODEL = "model";
     public static final String EXTRA_VOICE = "voice";
     public static final String EXTRA_SYSTEM_PROMPT = "systemPrompt";
+    public static final String EXTRA_MUTED = "muted";
+
+    private static volatile boolean serviceRunning = false;
 
     // Recording
     private AudioRecord audioRecord = null;
     private Thread recordingThread = null;
     private volatile boolean isRecording = false;
+    private volatile boolean isMuted = false;
 
     // Gemini Live WebSocket
     private GeminiLiveNativeSession geminiSession = null;
@@ -75,6 +81,7 @@ public class MicrophoneForegroundService extends Service
     private Handler mainHandler = null;
     private volatile boolean shouldReconnect = true;
     private int reconnectAttempts = 0;
+    private static final int MAX_RECONNECT_ATTEMPTS = 8;
     private static final int MAX_RECONNECT_DELAY_MS = 30000;
 
     // Notification
@@ -83,6 +90,7 @@ public class MicrophoneForegroundService extends Service
     @Override
     public void onCreate() {
         super.onCreate();
+        serviceRunning = true;
         createNotificationChannel();
         mainHandler = new Handler(Looper.getMainLooper());
         notificationManager = getSystemService(NotificationManager.class);
@@ -118,7 +126,20 @@ public class MicrophoneForegroundService extends Service
             return START_NOT_STICKY;
         }
 
+        if (ACTION_SET_MUTED.equals(action)) {
+            setMuted(intent.getBooleanExtra(EXTRA_MUTED, false));
+            return START_NOT_STICKY;
+        }
+
+        if (ACTION_INTERRUPT_PLAYBACK.equals(action)) {
+            clearPlaybackQueue();
+            MicrophoneServicePlugin.sendTranscriptEvent("interrupted", null, true);
+            updateNotification(isMuted ? "Muted" : "Listening...");
+            return START_NOT_STICKY;
+        }
+
         // Extract config from intent
+        isMuted = false;
         if (intent.hasExtra(EXTRA_API_KEY)) {
             apiKey = intent.getStringExtra(EXTRA_API_KEY);
         }
@@ -145,6 +166,9 @@ public class MicrophoneForegroundService extends Service
             }
         } catch (Exception e) {
             Log.e(TAG, "Failed to start service in foreground", e);
+            MicrophoneServicePlugin.sendConnectionStatus("error", "Foreground service failed: " + e.getMessage());
+            stopSelf();
+            return START_NOT_STICKY;
         }
 
         // Prevent zombie notifications if API key is missing or empty
@@ -184,6 +208,7 @@ public class MicrophoneForegroundService extends Service
         stopRecording();
         stopPlayback();
         closeGeminiSession();
+        serviceRunning = false;
         try {
             stopForeground(true);
         } catch (Exception e) {
@@ -278,12 +303,12 @@ public class MicrophoneForegroundService extends Service
                         String base64Data = Base64.encodeToString(byteBuffer, 0, readSize * 2, Base64.NO_WRAP);
 
                         // Send audio directly to native Gemini WebSocket
-                        if (geminiSession != null && geminiSession.isConnected()) {
+                        if (!isMuted && geminiSession != null && geminiSession.isConnected()) {
                             geminiSession.sendAudio(base64Data);
                         }
 
                         // Also send RMS to Svelte for visualizer
-                        MicrophoneServicePlugin.sendAudioRms(rms);
+                        MicrophoneServicePlugin.sendAudioRms(isMuted ? 0 : rms);
                     } else if (readSize < 0) {
                         Log.e(TAG, "AudioRecord read error: " + readSize);
                         break;
@@ -354,6 +379,19 @@ public class MicrophoneForegroundService extends Service
         if (!shouldReconnect) return;
 
         reconnectAttempts++;
+        if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+            Log.e(TAG, "Max reconnect attempts reached, stopping Gemini Live service");
+            shouldReconnect = false;
+            updateNotification("Connection failed");
+            MicrophoneServicePlugin.sendConnectionStatus("error", "Unable to reconnect to Gemini Live");
+            stopRecording();
+            stopPlayback();
+            closeGeminiSession();
+            stopForeground(true);
+            stopSelf();
+            return;
+        }
+
         int delay = Math.min(2000 * reconnectAttempts, MAX_RECONNECT_DELAY_MS);
         Log.d(TAG, "Scheduling reconnect in " + delay + "ms (attempt " + reconnectAttempts + ")");
 
@@ -486,6 +524,16 @@ public class MicrophoneForegroundService extends Service
                 // ignore
             }
         }
+    }
+
+    public void setMuted(boolean muted) {
+        isMuted = muted;
+        MicrophoneServicePlugin.sendAudioRms(0);
+        updateNotification(muted ? "Muted" : "Listening...");
+    }
+
+    public static boolean isServiceRunning() {
+        return serviceRunning;
     }
 
     // ========================================================================

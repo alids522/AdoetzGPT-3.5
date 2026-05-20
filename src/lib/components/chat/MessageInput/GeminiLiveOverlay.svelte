@@ -9,12 +9,15 @@
 		isCapacitorApp,
 		startMicrophoneForegroundService,
 		stopMicrophoneForegroundService,
+		setMicrophoneForegroundServiceMuted,
+		interruptMicrophoneForegroundServicePlayback,
 		getMicrophoneServicePlugin,
 		type GeminiLiveConfig
 	} from '$lib/capacitor/microphone';
 
 	let nativeListeners: any[] = [];
 	let userClosed = false;
+	let cleanedUp = false;
 
 	const i18n = getContext('i18n') as any;
 	const dispatch = createEventDispatcher();
@@ -596,12 +599,20 @@
 		}
 	};
 
-	const triggerLocalInterrupt = () => {
+	const triggerLocalInterrupt = async () => {
 		if (!isPlaying && audioQueue.length === 0) return;
 		console.debug('Local interrupt triggered.');
 
 		isInterrupting = true;
 		audioQueue = [];
+
+		if (isCapacitorApp()) {
+			const interrupted = await interruptMicrophoneForegroundServicePlayback();
+			if (!interrupted) {
+				isInterrupting = false;
+			}
+			return;
+		}
 
 		if (audioSource) {
 			try { audioSource.stop(); } catch (e) {}
@@ -721,8 +732,16 @@
 		isListening = true;
 	};
 
-	const toggleMute = () => {
-		isMuted = !isMuted;
+	const toggleMute = async () => {
+		const nextMuted = !isMuted;
+		isMuted = nextMuted;
+		if (isCapacitorApp()) {
+			const updated = await setMicrophoneForegroundServiceMuted(nextMuted);
+			if (!updated) {
+				isMuted = !nextMuted;
+				toast.error('Failed to update microphone state');
+			}
+		}
 	};
 
 	const setWakeLock = async () => {
@@ -770,6 +789,9 @@
 	});
 
 	const cleanup = () => {
+		if (cleanedUp) return;
+		cleanedUp = true;
+
 		if (isCapacitorApp()) {
 			removeNativeListeners();
 			stopMicrophoneForegroundService();

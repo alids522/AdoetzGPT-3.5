@@ -43,9 +43,6 @@ function initCapacitor() {
 	};
 }
 
-let micServiceActive = false;
-let activeMicStreams: Set<MediaStream> = new Set();
-
 function setupMicrophoneHandling() {
 	if (!isCapacitorApp()) return;
 
@@ -54,32 +51,7 @@ function setupMicrophoneHandling() {
 	if (!originalGetUserMedia) return;
 
 	navigator.mediaDevices.getUserMedia = async function (constraints) {
-		const stream = await originalGetUserMedia(constraints);
-
-		// Check if audio is requested
-		const hasAudioConstraint =
-			(constraints && typeof constraints === 'object') &&
-			((constraints as MediaStreamConstraints).audio !== undefined &&
-			 (constraints as MediaStreamConstraints).audio !== false);
-
-		if (hasAudioConstraint && stream) {
-			activeMicStreams.add(stream);
-
-			stream.addEventListener('inactive', () => {
-				activeMicStreams.delete(stream);
-				if (activeMicStreams.size === 0 && micServiceActive) {
-					stopMicrophoneForegroundService();
-					micServiceActive = false;
-				}
-			});
-
-			if (!micServiceActive) {
-				const started = await startMicrophoneForegroundService();
-				micServiceActive = started;
-			}
-		}
-
-		return stream;
+		return await originalGetUserMedia(constraints);
 	};
 
 	// Also hook into enumerateDevices to detect microphone usage

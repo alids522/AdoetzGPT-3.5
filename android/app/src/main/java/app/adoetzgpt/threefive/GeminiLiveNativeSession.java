@@ -164,11 +164,12 @@ public class GeminiLiveNativeSession {
             speechConfig.put("voiceConfig", voiceConfig);
             generationConfig.put("speechConfig", speechConfig);
 
-            // Enable transcriptions
-            generationConfig.put("inputAudioTranscription", new JSONObject());
-            generationConfig.put("outputAudioTranscription", new JSONObject());
-
             setupContent.put("generationConfig", generationConfig);
+
+            // Enable transcriptions. These belong directly on the Live setup message,
+            // not inside generationConfig.
+            setupContent.put("inputAudioTranscription", new JSONObject());
+            setupContent.put("outputAudioTranscription", new JSONObject());
 
             // System instruction
             if (systemPrompt != null && !systemPrompt.isEmpty()) {
@@ -201,12 +202,10 @@ public class GeminiLiveNativeSession {
         try {
             JSONObject msg = new JSONObject();
             JSONObject realtimeInput = new JSONObject();
-            JSONArray mediaChunks = new JSONArray();
-            JSONObject chunk = new JSONObject();
-            chunk.put("mimeType", "audio/pcm;rate=16000");
-            chunk.put("data", base64PcmData);
-            mediaChunks.put(chunk);
-            realtimeInput.put("mediaChunks", mediaChunks);
+            JSONObject audio = new JSONObject();
+            audio.put("mimeType", "audio/pcm;rate=16000");
+            audio.put("data", base64PcmData);
+            realtimeInput.put("audio", audio);
             msg.put("realtimeInput", realtimeInput);
 
             webSocket.send(msg.toString());
