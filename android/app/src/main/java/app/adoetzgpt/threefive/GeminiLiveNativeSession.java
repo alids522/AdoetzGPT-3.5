@@ -119,12 +119,17 @@ public class GeminiLiveNativeSession {
 
                 @Override
                 public void onFailure(WebSocket ws, Throwable t, Response response) {
-                    Log.e(TAG, "WebSocket failure: " + t.getMessage(), t);
+                    String responseDetails = "";
+                    if (response != null) {
+                        responseDetails = " (HTTP " + response.code() + " " + response.message() + ")";
+                    }
+                    Log.e(TAG, "WebSocket failure: " + t.getMessage() + responseDetails, t);
                     isConnected = false;
                     isSetupDone = false;
                     if (!isClosed) {
-                        listener.onError(t.getMessage() != null ? t.getMessage() : "Connection failed");
-                        listener.onDisconnected(-1, t.getMessage());
+                        String message = t.getMessage() != null ? t.getMessage() : "Connection failed";
+                        listener.onError(message + responseDetails);
+                        listener.onDisconnected(-1, message + responseDetails);
                     }
                 }
             });
@@ -141,19 +146,16 @@ public class GeminiLiveNativeSession {
 
     private void sendSetupMessage() {
         try {
-            JSONObject setup = new JSONObject();
-            JSONObject setupContent = new JSONObject();
+            JSONObject message = new JSONObject();
+            JSONObject config = new JSONObject();
 
             // Model
-            setupContent.put("model", model);
-
-            // Generation config
-            JSONObject generationConfig = new JSONObject();
+            config.put("model", model);
 
             // Response modalities
             JSONArray modalities = new JSONArray();
             modalities.put("AUDIO");
-            generationConfig.put("responseModalities", modalities);
+            config.put("responseModalities", modalities);
 
             // Speech config
             JSONObject speechConfig = new JSONObject();
@@ -162,14 +164,11 @@ public class GeminiLiveNativeSession {
             prebuiltVoiceConfig.put("voiceName", voice);
             voiceConfig.put("prebuiltVoiceConfig", prebuiltVoiceConfig);
             speechConfig.put("voiceConfig", voiceConfig);
-            generationConfig.put("speechConfig", speechConfig);
+            config.put("speechConfig", speechConfig);
 
-            setupContent.put("generationConfig", generationConfig);
-
-            // Enable transcriptions. These belong directly on the Live setup message,
-            // not inside generationConfig.
-            setupContent.put("inputAudioTranscription", new JSONObject());
-            setupContent.put("outputAudioTranscription", new JSONObject());
+            // Enable transcriptions. These belong directly on the Live config message.
+            config.put("inputAudioTranscription", new JSONObject());
+            config.put("outputAudioTranscription", new JSONObject());
 
             // System instruction
             if (systemPrompt != null && !systemPrompt.isEmpty()) {
@@ -179,17 +178,17 @@ public class GeminiLiveNativeSession {
                 textPart.put("text", systemPrompt);
                 parts.put(textPart);
                 systemInstruction.put("parts", parts);
-                setupContent.put("systemInstruction", systemInstruction);
+                config.put("systemInstruction", systemInstruction);
             }
 
-            setup.put("setup", setupContent);
+            message.put("config", config);
 
-            String msg = setup.toString();
-            Log.d(TAG, "Sending setup message (" + msg.length() + " chars)");
+            String msg = message.toString();
+            Log.d(TAG, "Sending Live config message (" + msg.length() + " chars)");
             webSocket.send(msg);
         } catch (JSONException e) {
-            Log.e(TAG, "Failed to build setup message", e);
-            listener.onError("Failed to build setup message: " + e.getMessage());
+            Log.e(TAG, "Failed to build Live config message", e);
+            listener.onError("Failed to build Live config message: " + e.getMessage());
         }
     }
 
@@ -218,7 +217,16 @@ public class GeminiLiveNativeSession {
         try {
             JSONObject msg = new JSONObject(text);
 
-            // Setup complete acknowledgement
+            if (msg.has("error")) {
+                String message = msg.optJSONObject("error") != null
+                    ? msg.optJSONObject("error").optString("message", msg.optJSONObject("error").toString())
+                    : msg.optString("error", "Unknown Gemini Live error");
+                Log.e(TAG, "Server error: " + message);
+                listener.onError(message);
+                return;
+            }
+
+            // Setup/config complete acknowledgement
             if (msg.has("setupComplete")) {
                 Log.d(TAG, "Setup complete");
                 isSetupDone = true;
