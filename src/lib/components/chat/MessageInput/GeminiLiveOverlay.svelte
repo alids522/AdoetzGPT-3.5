@@ -430,25 +430,33 @@
 					const micService = win?.Capacitor?.Plugins?.MicrophoneService;
 					if (micService) {
 						nativeListener = await micService.addListener('audioChunk', (event: { data: string; rms: number }) => {
-							if (!isListening || isMuted || !session) return;
+							if (!isListening || isMuted) return;
 
 							rmsLevel = event.rms;
+
+							if (!session) {
+								// Session dropped (e.g. app was backgrounded and WebSocket died)
+								// Trigger reconnect proactively instead of discarding audio
+								if (!userClosed && !isReconnecting) {
+									console.log('Native mic active but session is null. Triggering reconnect...');
+									reconnect();
+								}
+								return;
+							}
 
 							if (isPlaying && rmsLevel > 0.15 && !isInterrupting) {
 								triggerLocalInterrupt();
 							}
 
-							if (session) {
-								try {
-									(session as any).sendRealtimeInput({
-										audio: {
-											mimeType: 'audio/pcm;rate=16000',
-											data: event.data
-										}
-									});
-								} catch (e) {
-									console.error('Failed to send native audio chunk:', e);
-								}
+							try {
+								(session as any).sendRealtimeInput({
+									audio: {
+										mimeType: 'audio/pcm;rate=16000',
+										data: event.data
+									}
+								});
+							} catch (e) {
+								console.error('Failed to send native audio chunk:', e);
 							}
 						});
 						isListening = true;
@@ -600,7 +608,9 @@
 
 	const cleanup = (isReconnect = false) => {
 		deliberateClose = true;
-		if (isCapacitorApp()) {
+
+		// Only tear down native mic service on full close, not reconnect
+		if (!isReconnect && isCapacitorApp()) {
 			if (nativeListener) {
 				try {
 					nativeListener.remove();
@@ -615,24 +625,27 @@
 			session = null;
 		}
 
-		if (audioStream) {
-			audioStream.getTracks().forEach((track) => track.stop());
-			audioStream = null;
-		}
+		// Only tear down WebRTC resources on full close (not used on native Capacitor anyway)
+		if (!isReconnect) {
+			if (audioStream) {
+				audioStream.getTracks().forEach((track) => track.stop());
+				audioStream = null;
+			}
 
-		if (processor) {
-			try { processor.disconnect(); } catch (e) {}
-			processor = null;
-		}
+			if (processor) {
+				try { processor.disconnect(); } catch (e) {}
+				processor = null;
+			}
 
-		if (audioSource) {
-			try { audioSource.stop(); } catch (e) {}
-			audioSource = null;
-		}
+			if (audioSource) {
+				try { audioSource.stop(); } catch (e) {}
+				audioSource = null;
+			}
 
-		if (audioContext) {
-			try { audioContext.close(); } catch (e) {}
-			audioContext = null;
+			if (audioContext) {
+				try { audioContext.close(); } catch (e) {}
+				audioContext = null;
+			}
 		}
 
 		isListening = false;
@@ -680,7 +693,11 @@
 
 		const initializedSession = await initSession(true);
 		if (initializedSession) {
-			await startAudioInput();
+			// If native mic service is still running, just re-enable listening
+			// Otherwise restart the full audio pipeline
+			if (!nativeListener) {
+				await startAudioInput();
+			}
 			startListening();
 			toast.success('Gemini Live reconnected');
 		} else {

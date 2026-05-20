@@ -183,8 +183,10 @@ public class MicrophoneForegroundService extends Service {
             NotificationChannel channel = new NotificationChannel(
                 CHANNEL_ID,
                 "Microphone Active",
-                NotificationManager.IMPORTANCE_LOW
+                NotificationManager.IMPORTANCE_DEFAULT
             );
+            channel.setSound(null, null);
+            channel.enableVibration(false);
             channel.setDescription("Notification shown when microphone is active for live conversation");
             NotificationManager manager = getSystemService(NotificationManager.class);
             if (manager != null) {
@@ -215,7 +217,9 @@ public class MicrophoneForegroundService extends Service {
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .setContentIntent(pendingIntent)
             .setOngoing(true)
-            .setPriority(NotificationCompat.PRIORITY_LOW)
+            .setPriority(NotificationCompat.PRIORITY_DEFAULT)
+            .setSound(null)
+            .setVibrate(null)
             .addAction(android.R.drawable.ic_media_pause, "Stop Recording", stopPendingIntent)
             .build();
     }
