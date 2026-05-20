@@ -5,7 +5,6 @@ import android.content.Intent;
 import android.content.pm.PackageManager;
 import android.os.Build;
 
-import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.JSObject;
@@ -33,6 +32,56 @@ public class MicrophoneServicePlugin extends Plugin {
         instance = this;
     }
 
+    // ========================================================================
+    // Events sent from native service TO Svelte
+    // ========================================================================
+
+    /**
+     * Send RMS level to Svelte for visualizer animation.
+     */
+    public static void sendAudioRms(double rms) {
+        if (instance != null) {
+            JSObject js = new JSObject();
+            js.put("rms", rms);
+            instance.notifyListeners("audioRms", js);
+        }
+    }
+
+    /**
+     * Send transcript events from native Gemini session to Svelte.
+     * Types: input_transcription, output_transcription, turn_complete, interrupted
+     */
+    public static void sendTranscriptEvent(String type, String text, boolean finished) {
+        if (instance != null) {
+            JSObject js = new JSObject();
+            js.put("type", type);
+            if (text != null) {
+                js.put("text", text);
+            }
+            js.put("finished", finished);
+            instance.notifyListeners("geminiTranscript", js);
+        }
+    }
+
+    /**
+     * Send connection status changes to Svelte.
+     * Statuses: connecting, connected, reconnecting, disconnected, error
+     */
+    public static void sendConnectionStatus(String status, String message) {
+        if (instance != null) {
+            JSObject js = new JSObject();
+            js.put("status", status);
+            if (message != null) {
+                js.put("message", message);
+            }
+            instance.notifyListeners("geminiConnectionStatus", js);
+        }
+    }
+
+    /**
+     * Legacy: Send raw audio chunk to Svelte (kept for backwards compatibility).
+     * In native mode, audio goes directly to the Gemini WebSocket, not to Svelte.
+     */
     public static void sendAudioChunk(String base64Data, double rms) {
         if (instance != null) {
             JSObject js = new JSObject();
@@ -41,6 +90,10 @@ public class MicrophoneServicePlugin extends Plugin {
             instance.notifyListeners("audioChunk", js);
         }
     }
+
+    // ========================================================================
+    // Plugin methods called FROM Svelte
+    // ========================================================================
 
     @PluginMethod
     public void startForegroundService(PluginCall call) {
@@ -53,6 +106,17 @@ public class MicrophoneServicePlugin extends Plugin {
 
         Intent serviceIntent = new Intent(getContext(), MicrophoneForegroundService.class);
         serviceIntent.setAction(MicrophoneForegroundService.ACTION_START);
+
+        // Pass Gemini Live configuration to the service
+        String apiKey = call.getString("apiKey", "");
+        String model = call.getString("model", "");
+        String voice = call.getString("voice", "");
+        String systemPrompt = call.getString("systemPrompt", "");
+
+        serviceIntent.putExtra(MicrophoneForegroundService.EXTRA_API_KEY, apiKey);
+        serviceIntent.putExtra(MicrophoneForegroundService.EXTRA_MODEL, model);
+        serviceIntent.putExtra(MicrophoneForegroundService.EXTRA_VOICE, voice);
+        serviceIntent.putExtra(MicrophoneForegroundService.EXTRA_SYSTEM_PROMPT, systemPrompt);
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

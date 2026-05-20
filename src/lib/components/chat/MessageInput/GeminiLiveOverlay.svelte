@@ -8,13 +8,12 @@
 	import {
 		isCapacitorApp,
 		startMicrophoneForegroundService,
-		stopMicrophoneForegroundService
+		stopMicrophoneForegroundService,
+		type GeminiLiveConfig
 	} from '$lib/capacitor/microphone';
 
-	let nativeListener: any = null;
+	let nativeListeners: any[] = [];
 	let userClosed = false;
-	let deliberateClose = false;
-	let isReconnecting = false;
 
 	const i18n = getContext('i18n') as any;
 	const dispatch = createEventDispatcher();
@@ -32,6 +31,7 @@
 	}) => void = () => {};
 	export let conversationContext = '';
 
+	// WebView-only state (used when NOT on Capacitor)
 	let session: any = null;
 	let sessionId =
 		globalThis.crypto?.randomUUID?.() ?? `gemini-live-${Date.now()}-${Math.random().toString(36).slice(2)}`;
@@ -41,13 +41,14 @@
 	let audioSource: AudioBufferSourceNode | null = null;
 	let wakeLock: any = null;
 
-	// State
+	// Shared state
 	let isPlaying = false;
 	let isListening = false;
 	let isMuted = false;
 	let isInterrupting = false;
 	let rmsLevel = 0;
 	let audioQueue: { data: string; mimeType: string }[] = [];
+	let nativeConnected = false;
 
 	// Transcription and Chat Log state
 	interface ChatMessage {
@@ -94,7 +95,6 @@
 		});
 	};
 
-	// Auto-scroll the transcript to the bottom whenever text updates
 	const scrollToBottom = async () => {
 		await tick();
 		if (transcriptContainer) {
@@ -102,7 +102,6 @@
 		}
 	};
 
-	// Add message to the small local transcript preview only. The source of truth is Chat.svelte.
 	const addMessage = (message: ChatMessage) => {
 		chatHistory = [...chatHistory, message];
 	};
@@ -161,8 +160,189 @@
 		scrollToBottom();
 	}
 
+	const buildSystemPrompt = () => {
+		const basePersonality = PERSONALITIES[selectedPersonality];
+		const sharedContext = conversationContext?.trim()
+			? `\n\n[SHARED CONVERSATION HISTORY]\nThe following transcript is the canonical Open WebUI chat thread shared by all providers and input modes. Continue from it naturally and preserve facts from every model/user turn:\n${conversationContext.slice(-12000)}`
+			: '';
+		return `${basePersonality}${sharedContext}`;
+	};
+
+	// ========================================================================
+	// NATIVE MODE (Capacitor Android) — Everything runs in Java
+	// ========================================================================
+
+	const startNativeMode = async () => {
+		const apiKey = $config?.gemini?.api_key || import.meta.env.VITE_GEMINI_API_KEY || '';
+
+		if (!apiKey) {
+			toast.error('GEMINI_API_KEY not configured');
+			return;
+		}
+
+		const nativeConfig: GeminiLiveConfig = {
+			apiKey,
+			model: selectedModel,
+			voice: selectedVoice,
+			systemPrompt: buildSystemPrompt()
+		};
+
+		// Register native event listeners BEFORE starting the service
+		const win = window as any;
+		const micService = win?.Capacitor?.Plugins?.MicrophoneService;
+		if (!micService) {
+			toast.error('MicrophoneService plugin not available');
+			return;
+		}
+
+		// 1. Listen for RMS levels (for visualizer animation)
+		const rmsListener = await micService.addListener('audioRms', (event: { rms: number }) => {
+			rmsLevel = event.rms;
+		});
+		nativeListeners.push(rmsListener);
+
+		// 2. Listen for transcript events from native Gemini session
+		const transcriptListener = await micService.addListener(
+			'geminiTranscript',
+			(event: { type: string; text?: string; finished?: boolean }) => {
+				handleNativeTranscript(event);
+			}
+		);
+		nativeListeners.push(transcriptListener);
+
+		// 3. Listen for connection status changes
+		const statusListener = await micService.addListener(
+			'geminiConnectionStatus',
+			(event: { status: string; message?: string }) => {
+				handleNativeConnectionStatus(event);
+			}
+		);
+		nativeListeners.push(statusListener);
+
+		// Start the native foreground service with config
+		const started = await startMicrophoneForegroundService(nativeConfig);
+		if (!started) {
+			toast.error('Failed to start native Gemini Live service');
+			removeNativeListeners();
+			return;
+		}
+
+		isListening = true;
+		console.log('Native Gemini Live mode started');
+	};
+
+	const handleNativeTranscript = (event: { type: string; text?: string; finished?: boolean }) => {
+		switch (event.type) {
+			case 'input_transcription':
+				if (event.text) {
+					currentUserMessage += event.text;
+				}
+				if (event.finished) {
+					finalizeCurrentUserTurn();
+				}
+				break;
+
+			case 'output_transcription':
+				finalizeCurrentUserTurn();
+				if (event.text) {
+					if (hasUserTurnInSession) {
+						appendAssistantText(event.text);
+					} else {
+						pendingAssistantResponse += event.text;
+					}
+				}
+				if (!hasUserTurnInSession && event.finished && pendingAssistantResponse.trim()) {
+					pendingAssistantFinal = true;
+				}
+				isPlaying = true;
+				break;
+
+			case 'turn_complete':
+				isPlaying = false;
+				isInterrupting = false;
+
+				if (!hasUserTurnInSession && pendingAssistantResponse.trim()) {
+					pendingAssistantFinal = true;
+					return;
+				}
+
+				flushPendingAssistantResponse();
+
+				if (currentAiResponse.trim()) {
+					const textToSave =
+						currentAiResponse === "🎙️ (Speaking...)" ? '(Audio Response)' : currentAiResponse.trim();
+					addMessage({ role: 'ai', text: textToSave });
+					currentAiResponse = '';
+				}
+				emitLiveEvent({ type: 'assistant_final' });
+				aiStreaming = false;
+				break;
+
+			case 'interrupted':
+				isPlaying = false;
+				isInterrupting = false;
+				if (currentAiResponse.trim()) {
+					const textToSave =
+						currentAiResponse === "🎙️ (Speaking...)" ? '(Audio Response)' : currentAiResponse.trim();
+					addMessage({ role: 'ai', text: textToSave + ' [Interrupted]' });
+					currentAiResponse = '';
+				}
+				emitLiveEvent({ type: 'assistant_interrupted' });
+				aiStreaming = false;
+				break;
+		}
+	};
+
+	const handleNativeConnectionStatus = (event: { status: string; message?: string }) => {
+		switch (event.status) {
+			case 'connected':
+				nativeConnected = true;
+				isListening = true;
+				toast.success('Connected to Gemini Live');
+				break;
+			case 'reconnecting':
+				nativeConnected = false;
+				// Don't change isListening — mic is still recording
+				break;
+			case 'error':
+				toast.error(`Gemini Live error: ${event.message || 'Unknown error'}`);
+				break;
+			case 'disconnected':
+				nativeConnected = false;
+				break;
+		}
+	};
+
+	const removeNativeListeners = () => {
+		for (const listener of nativeListeners) {
+			try {
+				listener.remove();
+			} catch (e) {}
+		}
+		nativeListeners = [];
+	};
+
+	const restartNativeService = async () => {
+		await stopMicrophoneForegroundService();
+		removeNativeListeners();
+
+		chatHistory = [];
+		currentUserMessage = '';
+		currentAiResponse = '';
+		aiStreaming = false;
+		hasUserTurnInSession = false;
+		pendingAssistantResponse = '';
+		pendingAssistantFinal = false;
+		isPlaying = false;
+
+		await startNativeMode();
+	};
+
+	// ========================================================================
+	// WEB MODE (Browser / non-Capacitor) — WebSocket in JS
+	// ========================================================================
+
 	const initSession = async (isReconnect = false) => {
-		deliberateClose = false;
 		const apiKey = $config?.gemini?.api_key || import.meta.env.VITE_GEMINI_API_KEY || '';
 		const apiBaseUrl = $config?.gemini?.api_base_url || import.meta.env.VITE_GEMINI_API_BASE_URL || '';
 
@@ -177,11 +357,7 @@
 				...(apiBaseUrl && { baseUrl: apiBaseUrl })
 			});
 
-			const basePersonality = PERSONALITIES[selectedPersonality];
-			const sharedContext = conversationContext?.trim()
-				? `\n\n[SHARED CONVERSATION HISTORY]\nThe following transcript is the canonical Open WebUI chat thread shared by all providers and input modes. Continue from it naturally and preserve facts from every model/user turn:\n${conversationContext.slice(-12000)}`
-				: '';
-			const systemPrompt = `${basePersonality}${sharedContext}`;
+			const systemPrompt = buildSystemPrompt();
 
 			console.log('Connecting to Gemini Live with model:', selectedModel);
 
@@ -235,9 +411,7 @@
 							if (!hasUserTurnInSession && isFinished && pendingAssistantResponse.trim()) {
 								pendingAssistantFinal = true;
 							} else if (hasUserTurnInSession && isFinished && currentAiResponse.trim()) {
-								// Gemini Live transcription can finish before the turn itself is complete.
-								// Keep the shared assistant message open until turnComplete so late chunks
-								// append to the same bubble instead of creating sibling response versions.
+								// Keep open until turnComplete
 							}
 						}
 
@@ -255,7 +429,6 @@
 									});
 									playNextAudioChunk();
 								}
-								// Just in case it sends raw text here instead of outputTranscription
 								if (part.text && !hasOutputTranscript) {
 									appendAssistantText(part.text);
 								}
@@ -316,26 +489,6 @@
 					onclose: (e: CloseEvent) => {
 						console.debug('Gemini Live Closed:', e.code, e.reason);
 						session = null;
-
-						if (!deliberateClose && !userClosed) {
-							if (aiStreaming && currentAiResponse.trim()) {
-								const textToSave = currentAiResponse === "🎙️ (Speaking...)" ? "(Audio Response)" : currentAiResponse.trim();
-								addMessage({ role: 'ai', text: textToSave + ' [Disconnected]' });
-								currentAiResponse = '';
-								aiStreaming = false;
-								emitLiveEvent({ type: 'assistant_final' });
-							}
-							if (currentUserMessage.trim()) {
-								addMessage({ role: 'user', text: currentUserMessage.trim() + ' [Disconnected]' });
-								currentUserMessage = '';
-							}
-
-							setTimeout(() => {
-								if (!session && !userClosed && !deliberateClose) {
-									reconnect();
-								}
-							}, 2000);
-						}
 					}
 				}
 			});
@@ -421,57 +574,6 @@
 	};
 
 	const startAudioInput = async () => {
-		if (isCapacitorApp()) {
-			let nativeStarted = false;
-			try {
-				nativeStarted = await startMicrophoneForegroundService();
-				if (nativeStarted) {
-					const win = window as any;
-					const micService = win?.Capacitor?.Plugins?.MicrophoneService;
-					if (micService) {
-						nativeListener = await micService.addListener('audioChunk', (event: { data: string; rms: number }) => {
-							if (!isListening || isMuted) return;
-
-							rmsLevel = event.rms;
-
-							if (!session) {
-								// Session dropped (e.g. app was backgrounded and WebSocket died)
-								// Trigger reconnect proactively instead of discarding audio
-								if (!userClosed && !isReconnecting) {
-									console.log('Native mic active but session is null. Triggering reconnect...');
-									reconnect();
-								}
-								return;
-							}
-
-							if (isPlaying && rmsLevel > 0.15 && !isInterrupting) {
-								triggerLocalInterrupt();
-							}
-
-							try {
-								(session as any).sendRealtimeInput({
-									audio: {
-										mimeType: 'audio/pcm;rate=16000',
-										data: event.data
-									}
-								});
-							} catch (e) {
-								console.error('Failed to send native audio chunk:', e);
-							}
-						});
-						isListening = true;
-						console.log('Native background microphone service started successfully.');
-						return;
-					}
-				}
-			} catch (error) {
-				console.error('Failed to initialize native background audio recording:', error);
-			}
-
-			console.warn('Native background microphone service failed to start. Falling back to browser WebRTC (foreground-only).');
-			toast.info('Using foreground-only microphone mode');
-		}
-
 		try {
 			audioStream = await navigator.mediaDevices.getUserMedia({
 				audio: {
@@ -588,35 +690,39 @@
 		}
 	};
 
+	// ========================================================================
+	// LIFECYCLE
+	// ========================================================================
+
 	onMount(() => {
 		eventTarget.dispatchEvent(
 			new CustomEvent('gemini:live-status', {
 				detail: { active: true, chatId, model: selectedModel, sessionId }
 			})
 		);
+
 		(async () => {
 			await setWakeLock();
 
-			const initializedSession = await initSession();
-			if (initializedSession) {
-				await startAudioInput();
-				startListening();
+			if (isCapacitorApp()) {
+				// NATIVE MODE: everything runs in Java foreground service
+				await startNativeMode();
+			} else {
+				// WEB MODE: WebSocket in JS
+				const initializedSession = await initSession();
+				if (initializedSession) {
+					await startAudioInput();
+					startListening();
+				}
 			}
 		})();
+
 		return () => cleanup();
 	});
 
-	const cleanup = (isReconnect = false) => {
-		deliberateClose = true;
-
-		// Only tear down native mic service on full close, not reconnect
-		if (!isReconnect && isCapacitorApp()) {
-			if (nativeListener) {
-				try {
-					nativeListener.remove();
-				} catch (e) {}
-				nativeListener = null;
-			}
+	const cleanup = () => {
+		if (isCapacitorApp()) {
+			removeNativeListeners();
 			stopMicrophoneForegroundService();
 		}
 
@@ -625,27 +731,24 @@
 			session = null;
 		}
 
-		// Only tear down WebRTC resources on full close (not used on native Capacitor anyway)
-		if (!isReconnect) {
-			if (audioStream) {
-				audioStream.getTracks().forEach((track) => track.stop());
-				audioStream = null;
-			}
+		if (audioStream) {
+			audioStream.getTracks().forEach((track) => track.stop());
+			audioStream = null;
+		}
 
-			if (processor) {
-				try { processor.disconnect(); } catch (e) {}
-				processor = null;
-			}
+		if (processor) {
+			try { processor.disconnect(); } catch (e) {}
+			processor = null;
+		}
 
-			if (audioSource) {
-				try { audioSource.stop(); } catch (e) {}
-				audioSource = null;
-			}
+		if (audioSource) {
+			try { audioSource.stop(); } catch (e) {}
+			audioSource = null;
+		}
 
-			if (audioContext) {
-				try { audioContext.close(); } catch (e) {}
-				audioContext = null;
-			}
+		if (audioContext) {
+			try { audioContext.close(); } catch (e) {}
+			audioContext = null;
 		}
 
 		isListening = false;
@@ -653,71 +756,25 @@
 		isInterrupting = false;
 		rmsLevel = 0;
 		audioQueue = [];
-
-		if (!isReconnect) {
-			chatHistory = [];
-			currentUserMessage = '';
-			currentAiResponse = '';
-			aiStreaming = false;
-			hasUserTurnInSession = false;
-			pendingAssistantResponse = '';
-			pendingAssistantFinal = false;
-		} else {
-			currentUserMessage = '';
-			currentAiResponse = '';
-			aiStreaming = false;
-			pendingAssistantResponse = '';
-			pendingAssistantFinal = false;
-		}
+		chatHistory = [];
+		currentUserMessage = '';
+		currentAiResponse = '';
+		aiStreaming = false;
+		hasUserTurnInSession = false;
+		pendingAssistantResponse = '';
+		pendingAssistantFinal = false;
+		nativeConnected = false;
 
 		if (wakeLock) {
 			try { wakeLock.release(); } catch (e) {}
 			wakeLock = null;
 		}
 
-		if (!isReconnect) {
-			eventTarget.dispatchEvent(
-				new CustomEvent('gemini:live-status', {
-					detail: { active: false, chatId, model: selectedModel, sessionId }
-				})
-			);
-		}
-	};
-
-	const reconnect = async () => {
-		if (isReconnecting || userClosed) return;
-		isReconnecting = true;
-		console.log('Gemini Live reconnecting...');
-
-		cleanup(true);
-
-		const initializedSession = await initSession(true);
-		if (initializedSession) {
-			// If native mic service is still running, just re-enable listening
-			// Otherwise restart the full audio pipeline
-			if (!nativeListener) {
-				await startAudioInput();
-			}
-			startListening();
-			toast.success('Gemini Live reconnected');
-		} else {
-			setTimeout(() => {
-				if (!session && !userClosed) {
-					reconnect();
-				}
-			}, 5000);
-		}
-		isReconnecting = false;
-	};
-
-	const handleVisibilityChange = () => {
-		if (document.visibilityState === 'visible') {
-			console.log('App visibility changed to visible. Session status:', !!session);
-			if (!session && !userClosed && !isReconnecting) {
-				console.log('App resumed. Reconnecting Gemini Live...');
-				reconnect();
-			}
-		}
+		eventTarget.dispatchEvent(
+			new CustomEvent('gemini:live-status', {
+				detail: { active: false, chatId, model: selectedModel, sessionId }
+			})
+		);
 	};
 
 	const handleClose = async () => {
@@ -729,6 +786,58 @@
 			chatHistory: chatHistory
 		});
 		cleanup();
+	};
+
+	const handleSettingsModelChange = async () => {
+		localStorage.setItem('gemini_live_model', selectedModel);
+		if (isCapacitorApp()) {
+			await restartNativeService();
+		} else {
+			cleanup();
+			const newSession = await initSession(true);
+			if (newSession) {
+				await startAudioInput();
+				startListening();
+			}
+		}
+	};
+
+	const handleSettingsVoiceChange = async (voice: string) => {
+		if (selectedVoice === voice) return;
+		selectedVoice = voice;
+		localStorage.setItem('gemini_live_voice', voice);
+		if (isCapacitorApp()) {
+			await restartNativeService();
+		} else {
+			cleanup();
+			const newSession = await initSession(true);
+			if (newSession) {
+				await startAudioInput();
+				startListening();
+			}
+		}
+	};
+
+	const handleSettingsPersonalityChange = (persona: string) => {
+		if (selectedPersonality === persona) return;
+		selectedPersonality = persona;
+		localStorage.setItem('gemini_live_personality', persona);
+
+		if (isCapacitorApp()) {
+			// On native, personality changes require restarting the service
+			restartNativeService();
+		} else if (session) {
+			triggerLocalInterrupt();
+			setTimeout(() => {
+				try {
+					session.sendRealtimeInput({
+						text: `[SYSTEM INSTRUCTION OVERRIDE]: Do NOT forget what we've talked about. Retain all previous knowledge, user details, and context of our conversation. Change ONLY your behavior/persona to exactly this: ${PERSONALITIES[persona]}. Acknowledge this change immediately.`
+					});
+				} catch(e) {
+					console.error("Failed to inject personality:", e);
+				}
+			}, 300);
+		}
 	};
 
 	const handleKeydown = (e: KeyboardEvent) => {
@@ -743,6 +852,11 @@
 				toggleMute();
 			}
 		}
+	};
+
+	// No visibility-based reconnect needed for native mode — the Java service handles it
+	const handleVisibilityChange = () => {
+		// Not needed for native mode, but kept for web mode fallback
 	};
 </script>
 
@@ -876,15 +990,7 @@
 						id="gemini-live-model"
 						class="w-full px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-200 text-sm"
 						bind:value={selectedModel}
-						on:change={async () => {
-							localStorage.setItem('gemini_live_model', selectedModel);
-							cleanup();
-							const newSession = await initSession(true);
-							if (newSession) {
-								await startAudioInput();
-								startListening();
-							}
-						}}
+						on:change={handleSettingsModelChange}
 					>
 						<option value="models/gemini-3.1-flash-live-preview">Gemini 3.1 Flash Live (Recommended)</option>
 						<option value="models/gemini-live-2.5-flash-native-audio">Gemini 2.5 Live Native Audio</option>
@@ -900,19 +1006,7 @@
 								class="px-2 py-1.5 rounded-lg text-xs transition-all {selectedVoice === voice
 									? 'bg-purple-600 text-white shadow-md'
 									: 'bg-gray-50 dark:bg-gray-900 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300'}"
-								on:click={async () => {
-									if (selectedVoice === voice) return;
-
-									selectedVoice = voice;
-									localStorage.setItem('gemini_live_voice', voice);
-
-									cleanup();
-									const newSession = await initSession(true);
-									if (newSession) {
-										await startAudioInput();
-										startListening();
-									}
-								}}
+								on:click={() => handleSettingsVoiceChange(voice)}
 							>
 								{voice}
 							</button>
@@ -928,26 +1022,7 @@
 								class="px-2 py-1.5 rounded-lg text-xs transition-all {selectedPersonality === persona
 									? 'bg-blue-600 text-white shadow-md'
 									: 'bg-gray-50 dark:bg-gray-900 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300'}"
-								on:click={() => {
-									if (selectedPersonality === persona) return;
-
-									selectedPersonality = persona;
-									localStorage.setItem('gemini_live_personality', persona);
-
-									if (session) {
-										triggerLocalInterrupt();
-
-										setTimeout(() => {
-											try {
-												session.sendRealtimeInput({
-													text: `[SYSTEM INSTRUCTION OVERRIDE]: Do NOT forget what we've talked about. Retain all previous knowledge, user details, and context of our conversation. Change ONLY your behavior/persona to exactly this: ${PERSONALITIES[persona]}. Acknowledge this change immediately.`
-												});
-											} catch(e) {
-												console.error("Failed to inject personality:", e);
-											}
-										}, 300);
-									}
-								}}
+								on:click={() => handleSettingsPersonalityChange(persona)}
 							>
 								{persona}
 							</button>
