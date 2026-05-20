@@ -9,6 +9,7 @@ export interface GeminiLiveConfig {
 	model: string;
 	voice: string;
 	systemPrompt: string;
+	wsUrl?: string;
 }
 
 interface MicrophoneServicePlugin {

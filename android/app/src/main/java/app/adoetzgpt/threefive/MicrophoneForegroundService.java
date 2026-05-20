@@ -62,6 +62,7 @@ public class MicrophoneForegroundService extends Service
     private String model = "";
     private String voice = "";
     private String systemPrompt = "";
+    private String wsUrl = "";
 
     // Audio playback
     private AudioTrack audioTrack = null;
@@ -113,6 +114,9 @@ public class MicrophoneForegroundService extends Service
             }
             if (intent.hasExtra(EXTRA_SYSTEM_PROMPT)) {
                 systemPrompt = intent.getStringExtra(EXTRA_SYSTEM_PROMPT);
+            }
+            if (intent.hasExtra("wsUrl")) {
+                wsUrl = intent.getStringExtra("wsUrl");
             }
         }
 
@@ -269,7 +273,7 @@ public class MicrophoneForegroundService extends Service
 
         closeGeminiSession();
 
-        geminiSession = new GeminiLiveNativeSession(apiKey, model, voice, systemPrompt, this);
+        geminiSession = new GeminiLiveNativeSession(apiKey, model, voice, systemPrompt, wsUrl, this);
         geminiSession.connect();
         updateNotification("Connecting...");
         MicrophoneServicePlugin.sendConnectionStatus("connecting", null);

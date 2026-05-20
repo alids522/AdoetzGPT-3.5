@@ -181,11 +181,29 @@
 			return;
 		}
 
+		const apiBaseUrl = $config?.gemini?.api_base_url || import.meta.env.VITE_GEMINI_API_BASE_URL || '';
+		let wsUrl = '';
+		if (apiBaseUrl) {
+			let base = apiBaseUrl.trim();
+			if (base.startsWith('http://')) {
+				base = 'ws://' + base.slice(7);
+			} else if (base.startsWith('https://')) {
+				base = 'wss://' + base.slice(8);
+			} else if (!base.startsWith('ws://') && !base.startsWith('wss://')) {
+				base = 'wss://' + base;
+			}
+			if (base.endsWith('/')) {
+				base = base.slice(0, -1);
+			}
+			wsUrl = `${base}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`;
+		}
+
 		const nativeConfig: GeminiLiveConfig = {
 			apiKey,
 			model: selectedModel,
 			voice: selectedVoice,
-			systemPrompt: buildSystemPrompt()
+			systemPrompt: buildSystemPrompt(),
+			...(wsUrl && { wsUrl })
 		};
 
 		// Register native event listeners BEFORE starting the service

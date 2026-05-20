@@ -112,11 +112,13 @@ public class MicrophoneServicePlugin extends Plugin {
         String model = call.getString("model", "");
         String voice = call.getString("voice", "");
         String systemPrompt = call.getString("systemPrompt", "");
+        String wsUrl = call.getString("wsUrl", "");
 
         serviceIntent.putExtra(MicrophoneForegroundService.EXTRA_API_KEY, apiKey);
         serviceIntent.putExtra(MicrophoneForegroundService.EXTRA_MODEL, model);
         serviceIntent.putExtra(MicrophoneForegroundService.EXTRA_VOICE, voice);
         serviceIntent.putExtra(MicrophoneForegroundService.EXTRA_SYSTEM_PROMPT, systemPrompt);
+        serviceIntent.putExtra("wsUrl", wsUrl);
 
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {

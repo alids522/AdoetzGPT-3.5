@@ -41,6 +41,7 @@ public class GeminiLiveNativeSession {
     private final String model;
     private final String voice;
     private final String systemPrompt;
+    private final String wsUrl;
     private final Listener listener;
 
     private OkHttpClient client;
@@ -50,11 +51,12 @@ public class GeminiLiveNativeSession {
     private volatile boolean isClosed = false;
 
     public GeminiLiveNativeSession(String apiKey, String model, String voice,
-                                    String systemPrompt, Listener listener) {
+                                    String systemPrompt, String wsUrl, Listener listener) {
         this.apiKey = apiKey;
         this.model = model;
         this.voice = voice;
         this.systemPrompt = systemPrompt;
+        this.wsUrl = wsUrl;
         this.listener = listener;
     }
 
@@ -68,7 +70,8 @@ public class GeminiLiveNativeSession {
             .pingInterval(20, TimeUnit.SECONDS)      // Keep-alive pings
             .build();
 
-        String url = WS_ENDPOINT + "?key=" + apiKey;
+        String wsEndpoint = (wsUrl != null && !wsUrl.isEmpty()) ? wsUrl : WS_ENDPOINT;
+        String url = wsEndpoint + "?key=" + apiKey;
         Request request = new Request.Builder()
             .url(url)
             .build();
