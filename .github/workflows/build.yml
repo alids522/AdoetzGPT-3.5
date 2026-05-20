@@ -54,7 +54,7 @@ jobs:
 
       # 5. Install dependencies
       - name: Install dependencies
-        run: npm ci
+        run: npm install
 
       # 6. Build frontend
       - name: Build frontend Svelte SPA
