@@ -1,0 +1,13 @@
+android {
+    buildTypes {
+        debug {
+            debuggable true
+        }
+    }
+}
+
+dependencies {
+    implementation project(':capacitor-android')
+}
+
+apply from: '../cordova.gradle'

@@ -1,0 +1,16 @@
+{
+  "appId": "app.adoetzgpt.deep",
+  "appName": "AdoetzGPT",
+  "webDir": "build",
+  "android": {
+    "allowMixedContent": true,
+    "captureInput": true,
+    "webContentsDebuggingEnabled": false
+  },
+  "plugins": {
+    "LocalNotifications": {
+      "smallColor": "#171717",
+      "iconColor": "#171717"
+    }
+  }
+}
