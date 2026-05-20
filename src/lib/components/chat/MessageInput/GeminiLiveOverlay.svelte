@@ -12,6 +12,9 @@
 	} from '$lib/capacitor/microphone';
 
 	let nativeListener: any = null;
+	let userClosed = false;
+	let deliberateClose = false;
+	let isReconnecting = false;
 
 	const i18n = getContext('i18n') as any;
 	const dispatch = createEventDispatcher();
@@ -159,6 +162,7 @@
 	}
 
 	const initSession = async (isReconnect = false) => {
+		deliberateClose = false;
 		const apiKey = $config?.gemini?.api_key || import.meta.env.VITE_GEMINI_API_KEY || '';
 		const apiBaseUrl = $config?.gemini?.api_base_url || import.meta.env.VITE_GEMINI_API_BASE_URL || '';
 
@@ -312,6 +316,26 @@
 					onclose: (e: CloseEvent) => {
 						console.debug('Gemini Live Closed:', e.code, e.reason);
 						session = null;
+
+						if (!deliberateClose && !userClosed) {
+							if (aiStreaming && currentAiResponse.trim()) {
+								const textToSave = currentAiResponse === "🎙️ (Speaking...)" ? "(Audio Response)" : currentAiResponse.trim();
+								addMessage({ role: 'ai', text: textToSave + ' [Disconnected]' });
+								currentAiResponse = '';
+								aiStreaming = false;
+								emitLiveEvent({ type: 'assistant_final' });
+							}
+							if (currentUserMessage.trim()) {
+								addMessage({ role: 'user', text: currentUserMessage.trim() + ' [Disconnected]' });
+								currentUserMessage = '';
+							}
+
+							setTimeout(() => {
+								if (!session && !userClosed && !deliberateClose) {
+									reconnect();
+								}
+							}, 2000);
+						}
 					}
 				}
 			});
@@ -574,7 +598,8 @@
 		return () => cleanup();
 	});
 
-	const cleanup = () => {
+	const cleanup = (isReconnect = false) => {
+		deliberateClose = true;
 		if (isCapacitorApp()) {
 			if (nativeListener) {
 				try {
@@ -615,27 +640,71 @@
 		isInterrupting = false;
 		rmsLevel = 0;
 		audioQueue = [];
-		chatHistory = [];
-		currentUserMessage = '';
-		currentAiResponse = '';
-		aiStreaming = false;
-		hasUserTurnInSession = false;
-		pendingAssistantResponse = '';
-		pendingAssistantFinal = false;
+
+		if (!isReconnect) {
+			chatHistory = [];
+			currentUserMessage = '';
+			currentAiResponse = '';
+			aiStreaming = false;
+			hasUserTurnInSession = false;
+			pendingAssistantResponse = '';
+			pendingAssistantFinal = false;
+		} else {
+			currentUserMessage = '';
+			currentAiResponse = '';
+			aiStreaming = false;
+			pendingAssistantResponse = '';
+			pendingAssistantFinal = false;
+		}
 
 		if (wakeLock) {
-			wakeLock.release();
+			try { wakeLock.release(); } catch (e) {}
 			wakeLock = null;
 		}
 
-		eventTarget.dispatchEvent(
-			new CustomEvent('gemini:live-status', {
-				detail: { active: false, chatId, model: selectedModel, sessionId }
-			})
-		);
+		if (!isReconnect) {
+			eventTarget.dispatchEvent(
+				new CustomEvent('gemini:live-status', {
+					detail: { active: false, chatId, model: selectedModel, sessionId }
+				})
+			);
+		}
+	};
+
+	const reconnect = async () => {
+		if (isReconnecting || userClosed) return;
+		isReconnecting = true;
+		console.log('Gemini Live reconnecting...');
+
+		cleanup(true);
+
+		const initializedSession = await initSession(true);
+		if (initializedSession) {
+			await startAudioInput();
+			startListening();
+			toast.success('Gemini Live reconnected');
+		} else {
+			setTimeout(() => {
+				if (!session && !userClosed) {
+					reconnect();
+				}
+			}, 5000);
+		}
+		isReconnecting = false;
+	};
+
+	const handleVisibilityChange = () => {
+		if (document.visibilityState === 'visible') {
+			console.log('App visibility changed to visible. Session status:', !!session);
+			if (!session && !userClosed && !isReconnecting) {
+				console.log('App resumed. Reconnecting Gemini Live...');
+				reconnect();
+			}
+		}
 	};
 
 	const handleClose = async () => {
+		userClosed = true;
 		if (aiStreaming || currentAiResponse.trim()) {
 			emitLiveEvent({ type: 'assistant_final' });
 		}
@@ -660,7 +729,7 @@
 	};
 </script>
 
-<svelte:window on:keydown={handleKeydown} />
+<svelte:window on:keydown={handleKeydown} on:visibilitychange={handleVisibilityChange} />
 
 <div class="max-w-lg w-full h-full max-h-[100dvh] flex flex-col justify-between p-3 md:p-6">
 	<!-- Streaming Chat History Log -->
