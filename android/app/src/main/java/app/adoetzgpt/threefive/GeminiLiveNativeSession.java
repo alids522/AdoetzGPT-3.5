@@ -70,55 +70,73 @@ public class GeminiLiveNativeSession {
             .pingInterval(20, TimeUnit.SECONDS)      // Keep-alive pings
             .build();
 
-        String wsEndpoint = (wsUrl != null && !wsUrl.isEmpty()) ? wsUrl : WS_ENDPOINT;
-        String url = wsEndpoint + "?key=" + apiKey;
-        Request request = new Request.Builder()
-            .url(url)
-            .build();
+        Request request;
+        try {
+            String wsEndpoint = (wsUrl != null && !wsUrl.isEmpty()) ? wsUrl : WS_ENDPOINT;
+            String url = wsEndpoint + "?key=" + apiKey;
+            request = new Request.Builder()
+                .url(url)
+                .build();
+        } catch (Exception e) {
+            Log.e(TAG, "Malformed WebSocket URL: " + e.getMessage(), e);
+            listener.onError("Malformed WebSocket URL: " + e.getMessage());
+            listener.onDisconnected(-1, "Malformed URL");
+            return;
+        }
 
         Log.d(TAG, "Connecting to Gemini Live: " + model);
 
-        webSocket = client.newWebSocket(request, new WebSocketListener() {
-            @Override
-            public void onOpen(WebSocket ws, Response response) {
-                Log.d(TAG, "WebSocket opened");
-                isConnected = true;
-                listener.onConnected();
-                sendSetupMessage();
-            }
-
-            @Override
-            public void onMessage(WebSocket ws, String text) {
-                handleServerMessage(text);
-            }
-
-            @Override
-            public void onClosing(WebSocket ws, int code, String reason) {
-                Log.d(TAG, "WebSocket closing: " + code + " " + reason);
-                ws.close(code, reason);
-            }
-
-            @Override
-            public void onClosed(WebSocket ws, int code, String reason) {
-                Log.d(TAG, "WebSocket closed: " + code + " " + reason);
-                isConnected = false;
-                isSetupDone = false;
-                if (!isClosed) {
-                    listener.onDisconnected(code, reason);
+        try {
+            webSocket = client.newWebSocket(request, new WebSocketListener() {
+                @Override
+                public void onOpen(WebSocket ws, Response response) {
+                    Log.d(TAG, "WebSocket opened");
+                    isConnected = true;
+                    listener.onConnected();
+                    sendSetupMessage();
                 }
-            }
 
-            @Override
-            public void onFailure(WebSocket ws, Throwable t, Response response) {
-                Log.e(TAG, "WebSocket failure: " + t.getMessage(), t);
-                isConnected = false;
-                isSetupDone = false;
-                if (!isClosed) {
-                    listener.onError(t.getMessage() != null ? t.getMessage() : "Connection failed");
-                    listener.onDisconnected(-1, t.getMessage());
+                @Override
+                public void onMessage(WebSocket ws, String text) {
+                    handleServerMessage(text);
                 }
+
+                @Override
+                public void onClosing(WebSocket ws, int code, String reason) {
+                    Log.d(TAG, "WebSocket closing: " + code + " " + reason);
+                    ws.close(code, reason);
+                }
+
+                @Override
+                public void onClosed(WebSocket ws, int code, String reason) {
+                    Log.d(TAG, "WebSocket closed: " + code + " " + reason);
+                    isConnected = false;
+                    isSetupDone = false;
+                    if (!isClosed) {
+                        listener.onDisconnected(code, reason);
+                    }
+                }
+
+                @Override
+                public void onFailure(WebSocket ws, Throwable t, Response response) {
+                    Log.e(TAG, "WebSocket failure: " + t.getMessage(), t);
+                    isConnected = false;
+                    isSetupDone = false;
+                    if (!isClosed) {
+                        listener.onError(t.getMessage() != null ? t.getMessage() : "Connection failed");
+                        listener.onDisconnected(-1, t.getMessage());
+                    }
+                }
+            });
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to create WebSocket: " + e.getMessage(), e);
+            isConnected = false;
+            isSetupDone = false;
+            if (!isClosed) {
+                listener.onError("WebSocket initialization failed: " + e.getMessage());
+                listener.onDisconnected(-1, "Initialization failed");
             }
-        });
+        }
     }
 
     private void sendSetupMessage() {

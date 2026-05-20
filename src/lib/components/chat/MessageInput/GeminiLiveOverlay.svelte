@@ -1,9 +1,9 @@
 <script lang="ts">
-	import { onMount, getContext, createEventDispatcher, tick } from 'svelte';
+	import { onMount, onDestroy, getContext, createEventDispatcher, tick } from 'svelte';
 	import { GoogleGenAI, type LiveServerMessage } from '@google/genai';
 	import { toast } from 'svelte-sonner';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
-	import { WEBUI_API_BASE_URL } from '$lib/constants';
+	import { WEBUI_API_BASE_URL, getBackendUrl } from '$lib/constants';
 	import { config } from '$lib/stores';
 	import {
 		isCapacitorApp,
@@ -185,6 +185,17 @@
 		let wsUrl = '';
 		if (apiBaseUrl) {
 			let base = apiBaseUrl.trim();
+			
+			// If it's a relative path (starts with /), resolve it relative to the dynamic backend URL
+			if (base.startsWith('/')) {
+				const backendUrl = getBackendUrl();
+				if (backendUrl) {
+					base = backendUrl + base;
+				} else {
+					base = window.location.origin + base;
+				}
+			}
+			
 			if (base.startsWith('http://')) {
 				base = 'ws://' + base.slice(7);
 			} else if (base.startsWith('https://')) {
@@ -195,7 +206,17 @@
 			if (base.endsWith('/')) {
 				base = base.slice(0, -1);
 			}
-			wsUrl = `${base}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`;
+			
+			// For Google host, strip version paths (like /v1beta) that break live WS endpoint path structure
+			if (base.includes('generativelanguage.googleapis.com')) {
+				wsUrl = `wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`;
+			} else {
+				if (base.includes('BidiGenerateContent')) {
+					wsUrl = base;
+				} else {
+					wsUrl = `${base}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent`;
+				}
+			}
 		}
 
 		const nativeConfig: GeminiLiveConfig = {
@@ -736,6 +757,10 @@
 		})();
 
 		return () => cleanup();
+	});
+
+	onDestroy(() => {
+		cleanup();
 	});
 
 	const cleanup = () => {

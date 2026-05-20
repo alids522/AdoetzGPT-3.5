@@ -90,52 +90,76 @@ public class MicrophoneForegroundService extends Service
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
-        if (intent != null) {
-            String action = intent.getAction();
-            if (ACTION_STOP.equals(action)) {
-                shouldReconnect = false;
-                stopRecording();
-                stopPlayback();
-                closeGeminiSession();
-                stopForeground(true);
-                stopSelf();
-                return START_NOT_STICKY;
-            }
+        if (intent == null) {
+            Log.d(TAG, "onStartCommand: Intent is null, stopping self");
+            stopForeground(true);
+            stopSelf();
+            return START_NOT_STICKY;
+        }
 
-            // Extract config from intent
-            if (intent.hasExtra(EXTRA_API_KEY)) {
-                apiKey = intent.getStringExtra(EXTRA_API_KEY);
-            }
-            if (intent.hasExtra(EXTRA_MODEL)) {
-                model = intent.getStringExtra(EXTRA_MODEL);
-            }
-            if (intent.hasExtra(EXTRA_VOICE)) {
-                voice = intent.getStringExtra(EXTRA_VOICE);
-            }
-            if (intent.hasExtra(EXTRA_SYSTEM_PROMPT)) {
-                systemPrompt = intent.getStringExtra(EXTRA_SYSTEM_PROMPT);
-            }
-            if (intent.hasExtra("wsUrl")) {
-                wsUrl = intent.getStringExtra("wsUrl");
-            }
+        String action = intent.getAction();
+        if (ACTION_STOP.equals(action)) {
+            shouldReconnect = false;
+            stopRecording();
+            stopPlayback();
+            closeGeminiSession();
+            stopForeground(true);
+            stopSelf();
+            return START_NOT_STICKY;
+        }
+
+        // Extract config from intent
+        if (intent.hasExtra(EXTRA_API_KEY)) {
+            apiKey = intent.getStringExtra(EXTRA_API_KEY);
+        }
+        if (intent.hasExtra(EXTRA_MODEL)) {
+            model = intent.getStringExtra(EXTRA_MODEL);
+        }
+        if (intent.hasExtra(EXTRA_VOICE)) {
+            voice = intent.getStringExtra(EXTRA_VOICE);
+        }
+        if (intent.hasExtra(EXTRA_SYSTEM_PROMPT)) {
+            systemPrompt = intent.getStringExtra(EXTRA_SYSTEM_PROMPT);
+        }
+        if (intent.hasExtra("wsUrl")) {
+            wsUrl = intent.getStringExtra("wsUrl");
         }
 
         // Start as foreground service
         Notification notification = buildNotification("Connecting...");
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
-        } else {
-            startForeground(NOTIFICATION_ID, notification);
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
+            } else {
+                startForeground(NOTIFICATION_ID, notification);
+            }
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to start service in foreground", e);
         }
 
-        // Start all subsystems
-        shouldReconnect = true;
-        reconnectAttempts = 0;
-        startRecording();
-        startPlayback();
-        connectGeminiSession();
+        // Prevent zombie notifications if API key is missing or empty
+        if (apiKey == null || apiKey.isEmpty()) {
+            Log.e(TAG, "onStartCommand: API key is empty/null, stopping service immediately to avoid zombie notification");
+            MicrophoneServicePlugin.sendConnectionStatus("error", "No API key configured");
+            stopForeground(true);
+            stopSelf();
+            return START_NOT_STICKY;
+        }
 
-        return START_STICKY;
+        // Start all subsystems safely
+        try {
+            shouldReconnect = true;
+            reconnectAttempts = 0;
+            startRecording();
+            startPlayback();
+            connectGeminiSession();
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to initialize subsystems during service startup", e);
+            updateNotification("Error: " + e.getMessage());
+            MicrophoneServicePlugin.sendConnectionStatus("error", "Init failed: " + e.getMessage());
+        }
+
+        return START_NOT_STICKY;
     }
 
     @Nullable
@@ -150,6 +174,11 @@ public class MicrophoneForegroundService extends Service
         stopRecording();
         stopPlayback();
         closeGeminiSession();
+        try {
+            stopForeground(true);
+        } catch (Exception e) {
+            Log.e(TAG, "Error calling stopForeground in onDestroy", e);
+        }
         super.onDestroy();
     }
 
@@ -182,6 +211,9 @@ public class MicrophoneForegroundService extends Service
                 );
 
                 if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
+                    try {
+                        audioRecord.release();
+                    } catch (Exception e) {}
                     audioRecord = new AudioRecord(
                         MediaRecorder.AudioSource.MIC,
                         sampleRate, channelConfig, audioFormat, bufferSize
@@ -190,6 +222,10 @@ public class MicrophoneForegroundService extends Service
 
                 if (audioRecord.getState() != AudioRecord.STATE_INITIALIZED) {
                     Log.e(TAG, "AudioRecord failed to initialize");
+                    try {
+                        audioRecord.release();
+                    } catch (Exception e) {}
+                    audioRecord = null;
                     isRecording = false;
                     return;
                 }
@@ -197,50 +233,64 @@ public class MicrophoneForegroundService extends Service
                 audioRecord.startRecording();
             } catch (Exception e) {
                 Log.e(TAG, "Failed to start recording", e);
+                if (audioRecord != null) {
+                    try {
+                        audioRecord.release();
+                    } catch (Exception ex) {}
+                    audioRecord = null;
+                }
                 isRecording = false;
                 return;
             }
 
-            short[] buffer = new short[1600]; // 100ms frames at 16kHz
-            while (isRecording) {
-                int readSize = audioRecord.read(buffer, 0, buffer.length);
-                if (readSize > 0) {
-                    // Calculate RMS for visualizer
-                    double sum = 0;
-                    for (int i = 0; i < readSize; i++) {
-                        sum += buffer[i] * buffer[i];
-                    }
-                    double rms = Math.sqrt(sum / readSize) / 32768.0;
-
-                    // Convert to byte array and base64
-                    byte[] byteBuffer = new byte[readSize * 2];
-                    for (int i = 0; i < readSize; i++) {
-                        byteBuffer[i * 2] = (byte) (buffer[i] & 0x00FF);
-                        byteBuffer[i * 2 + 1] = (byte) ((buffer[i] & 0xFF00) >> 8);
-                    }
-                    String base64Data = Base64.encodeToString(byteBuffer, 0, readSize * 2, Base64.NO_WRAP);
-
-                    // Send audio directly to native Gemini WebSocket
-                    if (geminiSession != null && geminiSession.isConnected()) {
-                        geminiSession.sendAudio(base64Data);
-                    }
-
-                    // Also send RMS to Svelte for visualizer
-                    MicrophoneServicePlugin.sendAudioRms(rms);
-                }
-            }
-
-            // Cleanup AudioRecord
             try {
-                if (audioRecord != null) {
-                    if (audioRecord.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
-                        audioRecord.stop();
+                short[] buffer = new short[1600]; // 100ms frames at 16kHz
+                while (isRecording) {
+                    int readSize = audioRecord.read(buffer, 0, buffer.length);
+                    if (readSize > 0) {
+                        // Calculate RMS for visualizer
+                        double sum = 0;
+                        for (int i = 0; i < readSize; i++) {
+                            sum += buffer[i] * buffer[i];
+                        }
+                        double rms = Math.sqrt(sum / readSize) / 32768.0;
+
+                        // Convert to byte array and base64
+                        byte[] byteBuffer = new byte[readSize * 2];
+                        for (int i = 0; i < readSize; i++) {
+                            byteBuffer[i * 2] = (byte) (buffer[i] & 0x00FF);
+                            byteBuffer[i * 2 + 1] = (byte) ((buffer[i] & 0xFF00) >> 8);
+                        }
+                        String base64Data = Base64.encodeToString(byteBuffer, 0, readSize * 2, Base64.NO_WRAP);
+
+                        // Send audio directly to native Gemini WebSocket
+                        if (geminiSession != null && geminiSession.isConnected()) {
+                            geminiSession.sendAudio(base64Data);
+                        }
+
+                        // Also send RMS to Svelte for visualizer
+                        MicrophoneServicePlugin.sendAudioRms(rms);
+                    } else if (readSize < 0) {
+                        Log.e(TAG, "AudioRecord read error: " + readSize);
+                        break;
                     }
-                    audioRecord.release();
-                    audioRecord = null;
                 }
             } catch (Exception e) {
-                Log.e(TAG, "Error stopping AudioRecord", e);
+                Log.e(TAG, "Exception in recording loop", e);
+            } finally {
+                isRecording = false;
+                try {
+                    if (audioRecord != null) {
+                        if (audioRecord.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) {
+                            audioRecord.stop();
+                        }
+                        audioRecord.release();
+                        audioRecord = null;
+                        Log.d(TAG, "AudioRecord released successfully in finally block");
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error stopping/releasing AudioRecord in finally", e);
+                }
             }
         }, "AdoetzGPT-MicRecorder");
 
@@ -328,36 +378,63 @@ public class MicrophoneForegroundService extends Service
             .setEncoding(audioFormat)
             .build();
 
-        audioTrack = new AudioTrack(attrs, format, bufferSize, AudioTrack.MODE_STREAM,
-                AudioManager.AUDIO_SESSION_ID_GENERATE);
+        try {
+            audioTrack = new AudioTrack(attrs, format, bufferSize, AudioTrack.MODE_STREAM,
+                    AudioManager.AUDIO_SESSION_ID_GENERATE);
+        } catch (Exception e) {
+            Log.e(TAG, "Failed to initialize AudioTrack", e);
+            isPlaybackRunning = false;
+            return;
+        }
 
         playbackThread = new Thread(() -> {
             android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO);
-            audioTrack.play();
-
-            while (isPlaybackRunning) {
+            
+            try {
+                audioTrack.play();
+            } catch (Exception e) {
+                Log.e(TAG, "AudioTrack failed to start playing", e);
+                isPlaybackRunning = false;
                 try {
-                    byte[] data = playbackQueue.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS);
-                    if (data != null && isPlaybackRunning) {
-                        isPlayingBack = true;
-                        audioTrack.write(data, 0, data.length);
-                        // Check if queue is empty after write
-                        if (playbackQueue.isEmpty()) {
-                            isPlayingBack = false;
-                        }
-                    } else {
-                        isPlayingBack = false;
-                    }
-                } catch (InterruptedException e) {
-                    break;
-                }
+                    audioTrack.release();
+                } catch (Exception ex) {}
+                audioTrack = null;
+                return;
             }
 
             try {
-                audioTrack.stop();
-                audioTrack.release();
+                while (isPlaybackRunning) {
+                    try {
+                        byte[] data = playbackQueue.poll(100, java.util.concurrent.TimeUnit.MILLISECONDS);
+                        if (data != null && isPlaybackRunning) {
+                            isPlayingBack = true;
+                            audioTrack.write(data, 0, data.length);
+                            // Check if queue is empty after write
+                            if (playbackQueue.isEmpty()) {
+                                isPlayingBack = false;
+                            }
+                        } else {
+                            isPlayingBack = false;
+                        }
+                    } catch (InterruptedException e) {
+                        break;
+                    }
+                }
             } catch (Exception e) {
-                // ignore
+                Log.e(TAG, "Exception in playback loop", e);
+            } finally {
+                isPlaybackRunning = false;
+                isPlayingBack = false;
+                try {
+                    if (audioTrack != null) {
+                        audioTrack.stop();
+                        audioTrack.release();
+                        audioTrack = null;
+                        Log.d(TAG, "AudioTrack released successfully in finally block");
+                    }
+                } catch (Exception e) {
+                    Log.e(TAG, "Error stopping/releasing AudioTrack in finally", e);
+                }
             }
         }, "AdoetzGPT-AudioPlayback");
 
