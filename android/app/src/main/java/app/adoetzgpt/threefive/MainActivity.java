@@ -65,46 +65,6 @@ public class MainActivity extends BridgeActivity {
         // Cache mode for better performance
         webView.getSettings().setCacheMode(android.webkit.WebSettings.LOAD_DEFAULT);
 
-        // Set WebViewClient to handle URL navigation
-        webView.setWebViewClient(new WebViewClient() {
-            @Override
-            public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
-                Uri uri = request.getUrl();
-                String host = uri.getHost();
-
-                // Allow internal routing
-                if (host == null || host.isEmpty()) {
-                    return false;
-                }
-
-                // Open external links in browser
-                String scheme = uri.getScheme();
-                if ("adoetzgpt".equals(scheme)) {
-                    return false; // Handle internally as deep link
-                }
-
-                // Let WebView handle http/https for the configured backend
-                if ("http".equals(scheme) || "https".equals(scheme)) {
-                    return false;
-                }
-
-                // Open all other schemes externally
-                try {
-                    Intent intent = new Intent(Intent.ACTION_VIEW, uri);
-                    startActivity(intent);
-                } catch (Exception e) {
-                    // No app to handle
-                }
-                return true;
-            }
-
-            @Override
-            public void onReceivedError(WebView view, int errorCode, String description, String failingUrl) {
-                // Log errors but don't show native error page
-                android.util.Log.e("AdoetzGPT", "WebView error: " + errorCode + " - " + description);
-            }
-        });
-
         webView.setWebChromeClient(new WebChromeClient() {
             @Override
             public void onPermissionRequest(PermissionRequest request) {
