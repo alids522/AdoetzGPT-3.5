@@ -19,6 +19,7 @@
 	let userClosed = false;
 	let cleanedUp = false;
 	const useNativeGeminiLive = false;
+	const useNativeMicrophoneCapture = true;
 
 	const i18n = getContext('i18n') as any;
 	const dispatch = createEventDispatcher();
@@ -174,6 +175,8 @@
 	};
 
 	const isNativeGeminiLiveEnabled = () => useNativeGeminiLive && isCapacitorApp();
+	const isNativeMicrophoneCaptureEnabled = () =>
+		useNativeMicrophoneCapture && isCapacitorApp() && !isNativeGeminiLiveEnabled();
 
 	// ========================================================================
 	// NATIVE MODE (Capacitor Android) — Everything runs in Java
@@ -371,6 +374,60 @@
 			} catch (e) {}
 		}
 		nativeListeners = [];
+	};
+
+	const startNativeAudioInput = async () => {
+		const micService = getMicrophoneServicePlugin();
+		if (!micService) {
+			toast.error('MicrophoneService plugin not available');
+			return false;
+		}
+
+		const rmsListener = await micService.addListener('audioRms', (event: { rms: number }) => {
+			rmsLevel = event.rms;
+			if (isPlaying && rmsLevel > 0.15 && !isInterrupting) {
+				triggerLocalInterrupt();
+			}
+		});
+		nativeListeners.push(rmsListener);
+
+		const chunkListener = await micService.addListener(
+			'audioChunk',
+			(event: { data?: string; rms?: number }) => {
+				if (!isListening || isMuted || !session || !event?.data) return;
+				try {
+					(session as any).sendRealtimeInput({
+						audio: {
+							mimeType: 'audio/pcm;rate=16000',
+							data: event.data
+						}
+					});
+				} catch (e) {
+					console.error('Failed to send native audio chunk:', e);
+				}
+			}
+		);
+		nativeListeners.push(chunkListener);
+
+		const started = await startMicrophoneForegroundService({ captureOnly: true });
+		if (!started) {
+			removeNativeListeners();
+			toast.error('Failed to start Android microphone service');
+			return false;
+		}
+
+		isListening = true;
+		return true;
+	};
+
+	const startPlatformAudioInput = async () => {
+		if (isNativeMicrophoneCaptureEnabled()) {
+			return await startNativeAudioInput();
+		}
+
+		await startAudioInput();
+		startListening();
+		return true;
 	};
 
 	const restartNativeService = async () => {
@@ -738,7 +795,7 @@
 	const toggleMute = async () => {
 		const nextMuted = !isMuted;
 		isMuted = nextMuted;
-		if (isNativeGeminiLiveEnabled()) {
+		if (isNativeGeminiLiveEnabled() || isNativeMicrophoneCaptureEnabled()) {
 			const updated = await setMicrophoneForegroundServiceMuted(nextMuted);
 			if (!updated) {
 				isMuted = !nextMuted;
@@ -779,8 +836,7 @@
 				// WEB MODE: WebSocket in JS / WebView
 				const initializedSession = await initSession();
 				if (initializedSession) {
-					await startAudioInput();
-					startListening();
+					await startPlatformAudioInput();
 				}
 			}
 		})();
@@ -796,7 +852,7 @@
 		if (cleanedUp) return;
 		cleanedUp = true;
 
-		if (isNativeGeminiLiveEnabled()) {
+		if (isNativeGeminiLiveEnabled() || isNativeMicrophoneCaptureEnabled()) {
 			removeNativeListeners();
 			stopMicrophoneForegroundService();
 		}
@@ -872,8 +928,7 @@
 			cleanedUp = false;
 			const newSession = await initSession(true);
 			if (newSession) {
-				await startAudioInput();
-				startListening();
+				await startPlatformAudioInput();
 			}
 		}
 	};
@@ -889,8 +944,7 @@
 			cleanedUp = false;
 			const newSession = await initSession(true);
 			if (newSession) {
-				await startAudioInput();
-				startListening();
+				await startPlatformAudioInput();
 			}
 		}
 	};

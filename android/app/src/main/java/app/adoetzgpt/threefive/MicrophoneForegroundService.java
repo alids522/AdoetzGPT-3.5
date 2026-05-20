@@ -53,6 +53,7 @@ public class MicrophoneForegroundService extends Service
     public static final String EXTRA_VOICE = "voice";
     public static final String EXTRA_SYSTEM_PROMPT = "systemPrompt";
     public static final String EXTRA_MUTED = "muted";
+    public static final String EXTRA_CAPTURE_ONLY = "captureOnly";
 
     private static volatile boolean serviceRunning = false;
 
@@ -69,6 +70,7 @@ public class MicrophoneForegroundService extends Service
     private String voice = "";
     private String systemPrompt = "";
     private String wsUrl = "";
+    private volatile boolean captureOnly = false;
 
     // Audio playback
     private AudioTrack audioTrack = null;
@@ -140,6 +142,7 @@ public class MicrophoneForegroundService extends Service
 
         // Extract config from intent
         isMuted = false;
+        captureOnly = intent.getBooleanExtra(EXTRA_CAPTURE_ONLY, false);
         if (intent.hasExtra(EXTRA_API_KEY)) {
             apiKey = intent.getStringExtra(EXTRA_API_KEY);
         }
@@ -168,6 +171,17 @@ public class MicrophoneForegroundService extends Service
             Log.e(TAG, "Failed to start service in foreground", e);
             MicrophoneServicePlugin.sendConnectionStatus("error", "Foreground service failed: " + e.getMessage());
             stopSelf();
+            return START_NOT_STICKY;
+        }
+
+        if (captureOnly) {
+            shouldReconnect = false;
+            reconnectAttempts = 0;
+            closeGeminiSession();
+            stopPlayback();
+            startRecording();
+            updateNotification("Listening...");
+            MicrophoneServicePlugin.sendConnectionStatus("connected", null);
             return START_NOT_STICKY;
         }
 
@@ -302,9 +316,15 @@ public class MicrophoneForegroundService extends Service
                         }
                         String base64Data = Base64.encodeToString(byteBuffer, 0, readSize * 2, Base64.NO_WRAP);
 
-                        // Send audio directly to native Gemini WebSocket
-                        if (!isMuted && geminiSession != null && geminiSession.isConnected()) {
-                            geminiSession.sendAudio(base64Data);
+                        if (!isMuted) {
+                            if (captureOnly) {
+                                // Hybrid mode: native foreground service owns mic capture while
+                                // WebView/@google/genai owns the known-good Gemini Live session.
+                                MicrophoneServicePlugin.sendAudioChunk(base64Data, rms);
+                            } else if (geminiSession != null && geminiSession.isConnected()) {
+                                // Native-only mode: audio goes directly to native Gemini WebSocket.
+                                geminiSession.sendAudio(base64Data);
+                            }
                         }
 
                         // Also send RMS to Svelte for visualizer

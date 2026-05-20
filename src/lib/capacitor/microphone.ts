@@ -5,11 +5,12 @@
  */
 
 export interface GeminiLiveConfig {
-	apiKey: string;
-	model: string;
-	voice: string;
-	systemPrompt: string;
+	apiKey?: string;
+	model?: string;
+	voice?: string;
+	systemPrompt?: string;
 	wsUrl?: string;
+	captureOnly?: boolean;
 }
 
 interface MicrophoneServicePlugin {
