@@ -218,6 +218,12 @@
 				}
 			}
 		}
+		
+		// Avoid localhost loops on physical mobile devices
+		if (wsUrl && (wsUrl.includes('localhost') || wsUrl.includes('127.0.0.1'))) {
+			console.log('Ignoring invalid localhost wsUrl for native Android service, falling back to Google direct API:', wsUrl);
+			wsUrl = '';
+		}
 
 		const nativeConfig: GeminiLiveConfig = {
 			apiKey,

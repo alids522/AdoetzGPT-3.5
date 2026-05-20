@@ -91,7 +91,17 @@ public class MicrophoneForegroundService extends Service
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null) {
-            Log.d(TAG, "onStartCommand: Intent is null, stopping self");
+            Log.d(TAG, "onStartCommand: Intent is null, stopping self safely");
+            Notification notification = buildNotification("Stopping...");
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
+                } else {
+                    startForeground(NOTIFICATION_ID, notification);
+                }
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to start foreground on null intent", e);
+            }
             stopForeground(true);
             stopSelf();
             return START_NOT_STICKY;
@@ -191,7 +201,11 @@ public class MicrophoneForegroundService extends Service
         isRecording = true;
 
         recordingThread = new Thread(() -> {
-            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
+            try {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_URGENT_AUDIO);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to set recording thread priority: " + e.getMessage(), e);
+            }
 
             int sampleRate = 16000;
             int channelConfig = AudioFormat.CHANNEL_IN_MONO;
@@ -388,7 +402,11 @@ public class MicrophoneForegroundService extends Service
         }
 
         playbackThread = new Thread(() -> {
-            android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO);
+            try {
+                android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO);
+            } catch (Exception e) {
+                Log.e(TAG, "Failed to set playback thread priority: " + e.getMessage(), e);
+            }
             
             try {
                 audioTrack.play();
