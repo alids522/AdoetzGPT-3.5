@@ -191,7 +191,7 @@ public class MicrophoneForegroundService extends Service
                 }
 
                 audioRecord.startRecording();
-            } catch (SecurityException | Exception e) {
+            } catch (Exception e) {
                 Log.e(TAG, "Failed to start recording", e);
                 isRecording = false;
                 return;
