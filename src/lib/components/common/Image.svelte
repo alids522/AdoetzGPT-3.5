@@ -19,8 +19,56 @@
 
 	const i18n = getContext('i18n');
 
+	import { onDestroy } from 'svelte';
+
+	let objectUrl = '';
+
+	onDestroy(() => {
+		if (objectUrl) {
+			URL.revokeObjectURL(objectUrl);
+		}
+	});
+
 	let _src = '';
-	$: _src = safeImageUrl(src.startsWith('/') ? `${WEBUI_BASE_URL}${src}` : src);
+	$: {
+		if (src) {
+			const resolvedSrc = src.startsWith('/') ? `${WEBUI_BASE_URL}${src}` : src;
+			const isRemoteBackend = WEBUI_BASE_URL !== '' && resolvedSrc.startsWith(WEBUI_BASE_URL);
+			const isNative = typeof window !== 'undefined' && (window as any).Capacitor?.isNativePlatform?.();
+
+			if (isNative && isRemoteBackend && !resolvedSrc.startsWith('data:') && !resolvedSrc.startsWith('blob:')) {
+				const token = localStorage.token;
+				if (token) {
+					fetch(resolvedSrc, {
+						headers: {
+							'Authorization': `Bearer ${token}`
+						}
+					})
+						.then((res) => {
+							if (!res.ok) throw new Error('Failed to load image');
+							return res.blob();
+						})
+						.then((blob) => {
+							if (objectUrl) {
+								URL.revokeObjectURL(objectUrl);
+							}
+							objectUrl = URL.createObjectURL(blob);
+							_src = objectUrl;
+						})
+						.catch((err) => {
+							console.error('[Image] Authenticated fetch failed:', err);
+							_src = safeImageUrl(resolvedSrc);
+						});
+				} else {
+					_src = safeImageUrl(resolvedSrc);
+				}
+			} else {
+				_src = safeImageUrl(resolvedSrc);
+			}
+		} else {
+			_src = safeImageUrl('');
+		}
+	}
 
 	let showImagePreview = false;
 </script>

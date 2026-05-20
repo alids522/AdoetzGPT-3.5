@@ -114,7 +114,11 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onPause() {
         super.onPause();
-        // Don't destroy WebView state on pause
+        // Force the WebView to resume execution (JavaScript, WebRTC, sockets) even when in the background
+        WebView webView = getBridge().getWebView();
+        if (webView != null) {
+            webView.onResume();
+        }
     }
 
     @Override
