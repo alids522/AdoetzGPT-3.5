@@ -14,11 +14,7 @@ function initCapacitor() {
 	window.adoetzgpt = {
 		startMicrophoneService: async () => {
 			try {
-				const plugins = (window as any).Capacitor?.Plugins;
-				if (plugins?.MicrophoneService) {
-					const result = await plugins.MicrophoneService.startForegroundService();
-					return result?.started ?? false;
-				}
+				return await startMicrophoneForegroundService();
 			} catch (e) {
 				console.error('Failed to start microphone service:', e);
 			}
@@ -26,11 +22,7 @@ function initCapacitor() {
 		},
 		stopMicrophoneService: async () => {
 			try {
-				const plugins = (window as any).Capacitor?.Plugins;
-				if (plugins?.MicrophoneService) {
-					const result = await plugins.MicrophoneService.stopForegroundService();
-					return result?.stopped ?? false;
-				}
+				return await stopMicrophoneForegroundService();
 			} catch (e) {
 				console.error('Failed to stop microphone service:', e);
 			}

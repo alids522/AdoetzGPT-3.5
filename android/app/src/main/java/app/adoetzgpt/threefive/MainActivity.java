@@ -29,10 +29,11 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
-        super.onCreate(savedInstanceState);
-
         // Register custom plugins
+        // This must be called BEFORE super.onCreate() for Capacitor to see it
         registerPlugin(MicrophoneServicePlugin.class);
+
+        super.onCreate(savedInstanceState);
 
         // Keep screen on for live conversation
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
